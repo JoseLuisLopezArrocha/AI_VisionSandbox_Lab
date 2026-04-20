@@ -1,0 +1,22 @@
+{
+    "rules": [
+        {
+            "id": "1776699307998",
+            "name": "Telegram Prueba",
+            "class_target": "car",
+            "zone_target": 1,
+            "condition_op": "==",
+            "condition_val": 1,
+            "action": "telegram",
+            "cooldown": 10,
+            "validator": {
+                "provider": "None"
+            }
+        }
+    ],
+    "config": {
+        "webhook_url": "",
+        "telegram_token": "8587616990:AAEEBekE6eY8xVdFL1We43Vsw7xIXpjucew",
+        "telegram_chat_id": "-1003591233672"
+    }
+}
