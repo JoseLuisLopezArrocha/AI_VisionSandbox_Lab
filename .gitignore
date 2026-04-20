@@ -95,9 +95,10 @@ crash_log.txt
 full_output.log
 event_logs.txt
 
-# User specific configs (Opcional, se pueden dejar si son plantillas)
-# zones.json
-# events_config.json
+# User specific configs (Hardened)
+zones.json
+events_config.json
+scratch/
 
 # macOS
 .DS_Store
