@@ -4,6 +4,7 @@ import numpy as np
 import json
 import shutil
 from ultralytics import YOLO, RTDETR
+from hardware_manager import HardwareManager
 
 # Directorios de modelos
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
@@ -38,8 +39,9 @@ class ObjectDetector:
         self.current_hash = None
         self.model = None
         self.active_name = None
-        self.current_family = None
         self.custom_models = []
+        self.hardware_diag = HardwareManager.get_diagnostics()
+        print(f"[Detector] Hardware detectado: {self.hardware_diag['gpu_name']} | Backend: {self.hardware_diag['best_backend']}")
         
         # Estructura: { "YOLOv11": { "aliases": { "YOL 01": "path/yolo11n.pt", ... }, "metadata": {...} }, ... }
         self.architectures = {}
@@ -88,7 +90,17 @@ class ObjectDetector:
                     aliases = {}
                     for i, m in enumerate(family_models, 1):
                         alias = f"{prefix} {i:02d}"
-                        aliases[alias] = m["path"]
+                        
+                        # PRIORIDAD: Buscar versión optimizada OpenVINO si estamos en Intel
+                        # Ultralytics exporta a una carpeta [nombre]_openvino_model
+                        base_name = os.path.splitext(m["name"])[0]
+                        ov_path = os.path.join(dir_path, f"{base_name}_openvino_model")
+                        
+                        if os.path.exists(ov_path) and "openvino" in self.hardware_diag["best_backend"]:
+                            aliases[alias] = ov_path
+                            print(f"[Detector] Usando versión OpenVINO optimizada para {alias}")
+                        else:
+                            aliases[alias] = m["path"]
                     
                     self.architectures[entry] = {
                         "aliases": aliases,
@@ -199,27 +211,45 @@ class ObjectDetector:
 
         try:
             # Determinar tipo de cargador por familia o nombre de archivo
+            is_openvino = os.path.isdir(model_path)
+            
             if "rtdetr" in family.lower() or "rtdetr" in target_name.lower():
                 self.model = RTDETR(model_path)
             else:
-                self.model = YOLO(model_path)
+                self.model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
 
-            # Warm-up: Forzar carga de metadatos (.names) haciendo una inferencia mínima
-            # Esto evita que get_class_names devuelva nombres genéricos como "Clase 0"
+            # Warm-up y Selección de Dispositivo
             try:
+                # Si es OpenVINO, intentamos forzar el uso de la GPU Intel si está disponible
+                target_device = "CPU"
+                if is_openvino and self.hardware_diag["gpu_vendor"] == "Intel":
+                    target_device = "GPU" # OpenVINO GPU target
+                
+                print(f"[Detector] Iniciando warm-up en {target_device}...")
                 dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-                self.model(dummy, verbose=False)
+                
+                # Intentar inferencia inicial (warm-up)
+                self.model(dummy, verbose=False, device=target_device if is_openvino else None)
+                self.active_device = target_device
             except Exception as e:
-                print(f"Aviso: Fallo el warm-up del modelo: {e}")
+                print(f"[Detector] AVISO: Falló carga en {target_device}, intentando fallback a CPU: {e}")
+                try:
+                    dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+                    self.model(dummy, verbose=False, device="CPU" if is_openvino else None)
+                    self.active_device = "CPU"
+                except Exception as e2:
+                    print(f"[Detector] ERROR FATAL: No se puede cargar el modelo ni en CPU: {e2}")
+                    self.active_device = "UNK"
 
             self.current_hash = new_hash
             self.active_name = target_name
             self.current_family = family
+            self.is_openvino_active = is_openvino
             
             # Detectar si es un modelo World para habilitar prompts dinámicos
             self.is_world_model = "world" in family.lower() or "world" in target_name.lower()
             
-            print(f"Modelo {target_name} cargado correctamente. World Mode: {self.is_world_model}")
+            print(f"Modelo {target_name} cargado. Backend: {'OpenVINO ('+self.active_device+')' if is_openvino else 'Standard'}")
             return target_name
         except Exception as e:
             print(f"Error al cargar modelo {target_name}: {e}")
@@ -244,8 +274,13 @@ class ObjectDetector:
 
         h_frame, w_frame = frame.shape[:2]
 
-        # --- 1. Modelo principal (COCO) ---
+        # --- 1. Modelo principal ---
         kwargs = {"persist": True, "stream": False, "conf": conf_threshold, "verbose": False}
+        
+        # Si es OpenVINO, usamos el dispositivo que funcionó en el warm-up
+        if getattr(self, 'is_openvino_active', False):
+            kwargs["device"] = getattr(self, 'active_device', 'CPU')
+            
         if target_classes is not None:
             # ... (filtrado previo)
             coco_classes = []
@@ -371,4 +406,22 @@ class ObjectDetector:
             return True
         except Exception as e:
             print(f"Error al reconfigurar clases World: {e}")
+            return False
+
+    def export_current_to_openvino(self):
+        """Exporta el modelo actual al formato OpenVINO para aceleración Intel."""
+        if self.model is None or self.is_openvino_active:
+            return False
+            
+        try:
+            print(f"[Detector] Iniciando optimización OpenVINO para {self.active_name}...")
+            # Exportar (Esto crea una carpeta al lado del .pt)
+            export_path = self.model.export(format='openvino')
+            print(f"[Detector] Modelo optimizado con éxito en: {export_path}")
+            
+            # Refrescar arquitecturas para que reconozca el nuevo modelo
+            self.scan_models()
+            return True
+        except Exception as e:
+            print(f"[Detector] Error durante la exportación OpenVINO: {e}")
             return False

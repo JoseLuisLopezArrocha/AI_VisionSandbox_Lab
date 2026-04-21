@@ -4,3 +4,6 @@ Pillow>=10.0.0
 vidgear[core]>=0.3.0
 ultralytics>=8.1.0
 lapx
+yt-dlp
+openvino
+openvino-dev

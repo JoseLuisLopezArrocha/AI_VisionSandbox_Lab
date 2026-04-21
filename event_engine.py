@@ -219,6 +219,7 @@ class EventEngine:
 
     def _send_to_telegram(self, text):
         try:
+            print(f"[EventEngine] Iniciando envío a Telegram: {text[:30]}...")
             token = self.config.get("telegram_token", "").strip()
             chat_id = self.config.get("telegram_chat_id", "").strip()
             
@@ -228,7 +229,12 @@ class EventEngine:
                 return
 
             # Limpiar caracteres especiales para HTML (Telegram es estricto)
-            clean_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            # Solo escapamos si no parece que ya estamos enviando HTML intencionado
+            if "<b>" not in text and "<i>" not in text:
+                clean_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            else:
+                clean_text = text
+
 
             url = f"https://api.telegram.org/bot{token}/sendMessage"
             data = {

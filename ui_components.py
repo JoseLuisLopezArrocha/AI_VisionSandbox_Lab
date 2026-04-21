@@ -501,6 +501,19 @@ class ModelExplorerWindow(ctk.CTkToplevel):
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True, padx=20, pady=10)
 
+        # SECCIÓN DE ACELERACIÓN (NUEVA)
+        if "openvino" in self.detector.hardware_diag["best_backend"]:
+            accel_frame = ctk.CTkFrame(self, fg_color="#1a1c1e", border_width=1, border_color="#38bdf8")
+            accel_frame.pack(fill="x", padx=20, pady=(0, 10))
+            
+            ctk.CTkLabel(accel_frame, text="🚀 ACELERACIÓN INTEL DETECTADA", 
+                         font=ctk.CTkFont(size=11, weight="bold"), text_color="#38bdf8").pack(pady=(10, 5))
+            
+            self.btn_opt = ctk.CTkButton(accel_frame, text="Acelerar Modelo Actual (OpenVINO)", 
+                                         command=self._optimize_active,
+                                         fg_color="#0369a1", hover_color="#075985")
+            self.btn_opt.pack(pady=(0, 10), padx=20, fill="x")
+
         # Footer informativo
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", side="bottom", pady=15, padx=20)
@@ -567,3 +580,29 @@ class ModelExplorerWindow(ctk.CTkToplevel):
                 self._refresh()
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo borrar: {e}")
+
+    def _optimize_active(self):
+        """Dispara el proceso de optimización del modelo cargado en el detector."""
+        if not self.detector.model:
+            messagebox.showwarning("Aviso", "No hay ningún modelo cargado actualmente para optimizar.")
+            return
+            
+        if self.detector.is_openvino_active:
+            messagebox.showinfo("Aviso", "El modelo actual ya está optimizado y funcionando con OpenVINO.")
+            return
+
+        self.btn_opt.configure(state="disabled", text="⏳ Optimizando... (Esto puede tardar)")
+        self.update()
+
+        def run_opt():
+            success = self.detector.export_current_to_openvino()
+            def done():
+                self.btn_opt.configure(state="normal", text="Acelerar Modelo Actual (OpenVINO)")
+                if success:
+                    messagebox.showinfo("Éxito", f"Modelo '{self.detector.active_name}' optimizado para Intel.\nLa próxima vez que lo selecciones, usará la aceleración automática.")
+                    self._refresh()
+                else:
+                    messagebox.showerror("Error", "No se pudo realizar la optimización. Verifica los logs.")
+            self.after(0, done)
+
+        threading.Thread(target=run_opt, daemon=True).start()

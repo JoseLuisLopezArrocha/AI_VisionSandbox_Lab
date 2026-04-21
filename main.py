@@ -114,6 +114,8 @@ class VisionApp(ctk.CTk):
         self.last_infer_timestamp = 0
         self.flash_alpha = 0.0
         self.url = "https://www.youtube.com/watch?v=dfVK7ld38Ys"
+        self.locked_track_id = None  # TRACKING FOCUS: ID del objeto seguido exclusivamente
+        self.focus_lost_cnt = 0      # Contador para autoliberación si se pierde el rastro
 
         # 2. MOTORES
         splash.set_status("Iniciando motores de registro...")
@@ -197,6 +199,13 @@ class VisionApp(ctk.CTk):
         self.url_entry = ctk.CTkEntry(url_row, placeholder_text="URL o Ruta", height=28)
         self.url_entry.insert(0, self.url)
         self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        # UX: Seleccionar todo al hacer clic en lugar de borrar
+        def _select_all(_):
+            self.url_entry.focus_set()
+            self.url_entry.after(10, lambda: self.url_entry.selection_range(0, 'end'))
+        
+        self.url_entry.bind("<Button-1>", _select_all)
         self.url_entry.bind("<Return>", lambda _: self.change_stream())
 
         ctk.CTkButton(url_row, text="⚡", width=28, height=28, command=self.change_stream, 
@@ -370,11 +379,14 @@ class VisionApp(ctk.CTk):
         self.controls = ctk.CTkFrame(inner, fg_color="transparent", height=50)
         self.controls.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 20))
         
-        self.rewind_btn = ctk.CTkButton(self.controls, text="⏪ -5s", command=lambda: self.engine.seek_back(5), width=80)
-        self.rewind_btn.pack(side="left", padx=(0, 10))
+        self.rewind_btn = ctk.CTkButton(self.controls, text="⏪ -5s", command=lambda: self.engine.seek_back(5), width=70)
+        self.rewind_btn.pack(side="left", padx=(0, 5))
         
         self.play_btn = ctk.CTkButton(self.controls, text="⏸ Pausa", command=self.toggle_pause, width=100)
-        self.play_btn.pack(side="left")
+        self.play_btn.pack(side="left", padx=5)
+
+        self.forward_btn = ctk.CTkButton(self.controls, text="+5s ⏩", command=lambda: self.engine.seek_forward(5), width=70)
+        self.forward_btn.pack(side="left", padx=(5, 10))
 
         # Indicador "EN DIRECTO" (Oculto por defecto)
         self.live_indicator = ctk.CTkFrame(self.controls, fg_color="transparent")
@@ -382,6 +394,9 @@ class VisionApp(ctk.CTk):
         self.live_dot.pack(side="left", padx=(0, 5))
         self.live_text = ctk.CTkLabel(self.live_indicator, text="EN DIRECTO", font=ctk.CTkFont(size=13, weight="bold"), text_color="#ef4444")
         self.live_text.pack(side="left")
+        
+        self.live_url_label = ctk.CTkLabel(self.live_indicator, text="", font=ctk.CTkFont(size=11), text_color="#64748b")
+        self.live_url_label.pack(side="left", padx=(10, 0))
         
         # Sincronizar UI inicial
         self.after(500, self._update_media_controls)
@@ -505,9 +520,28 @@ class VisionApp(ctk.CTk):
         t_infer = time.time()
         self.is_inferencing = True
         try:
-            # Restaurar el uso de la imagen anotada para máxima precisión de cajas y dibujo original
+            # 1. Inferencia base
             ann, detections = self.detector.detect(frame, target_classes=self.target_classes, zones=self.zones, conf_threshold=self.conf_threshold)
+            
+            # --- LÓGICA MODO FOCUS (FILTRADO) ---
+            if self.locked_track_id is not None:
+                # Filtrar solo el ID bloqueado
+                filtered = [d for d in detections if d.get("track_id") == self.locked_track_id]
+                
+                if not filtered:
+                    # Si no está en este frame, incrementamos contador de pérdida
+                    self.focus_lost_cnt += 1
+                    if self.focus_lost_cnt > 30: # ~3 segundos a 10fps
+                        self.locked_track_id = None
+                        self.add_log("Focus Mode deshabilitado (Objetivo perdido).")
+                else:
+                    self.focus_lost_cnt = 0
+                    detections = filtered
+                    # RE-PINTADO: Ignoramos el frame anotado por el detector y dibujamos nosotros el foco
+                    ann = VisualPainter.draw_detections(frame.copy(), detections, is_focus=True)
+            
             self.annotated_frame, self.last_detections = ann, detections            
+            
             # --- EVALUACIÓN DE HITOS / EVENTOS ---
             self.event_engine.update_cumulative_stats(detections)
             def on_evidence(img, msg, ok):
@@ -529,8 +563,20 @@ class VisionApp(ctk.CTk):
 
     def change_stream(self):
         src = self.url_entry.get().strip()
+        
+        # Inteligencia de Fallback: Si el campo está vacío, usar la URL activa
+        if not src:
+            src = self.url
+            self.add_log("Campo vacío. Reintentando con la fuente activa...")
+        else:
+            self.url = src # Actualizar fuente de verdad
+
+        # Sincronizar el campo de texto (especialmente útil si hubo fallback o cambio de calidad)
+        self.url_entry.delete(0, 'end')
+        self.url_entry.insert(0, self.url)
+
         resolution = self.stream_quality_var.get()
-        self.add_log(f"Conectando a {os.path.basename(src)} ({resolution})...")
+        self.add_log(f"Configurando fuente: {os.path.basename(src) if os.path.exists(src) else src[:40]+'...'} ({resolution})")
         
         # Iniciar reconexión en hilo para no bloquear UI
         def _reconnect_and_update():
@@ -540,23 +586,37 @@ class VisionApp(ctk.CTk):
         threading.Thread(target=_reconnect_and_update, daemon=True).start()
 
     def _update_media_controls(self):
-        """Actualiza la visibilidad de los controles según si es stream o video."""
+        """Actualiza la visibilidad de los controles según si es directo o vídeo grabado."""
         is_stream = self.engine.is_stream
+        is_live = getattr(self.engine, 'is_live', False)
         
-        if is_stream:
-            # Ocultar controles de reproducción
-            self.rewind_btn.pack_forget()
-            self.play_btn.pack_forget()
-            # Mostrar indicador de directo
+        # Limpiar para reordenar
+        self.rewind_btn.pack_forget()
+        self.play_btn.pack_forget()
+        self.forward_btn.pack_forget()
+        self.live_indicator.pack_forget()
+
+        # Botones de navegación (Solo si NO es directo)
+        if not is_live:
+            self.rewind_btn.pack(side="left", padx=(0, 5))
+        
+        self.play_btn.pack(side="left", padx=5)
+        
+        if not is_live:
+            self.forward_btn.pack(side="left", padx=(5, 10))
+
+        # Indicador de directo (Solo si es LIVE y es STREAM)
+        if is_stream and is_live:
             self.live_indicator.pack(side="left", padx=10)
-        else:
-            # Ocultar indicador de directo
-            self.live_indicator.pack_forget()
-            # Mostrar controles de reproducción
-            self.rewind_btn.pack(side="left", padx=(0, 10))
-            self.play_btn.pack(side="left")
+            
+            # Mostrar URL filtrada
+            url_text = self.url_entry.get().strip()
+            if len(url_text) > 45:
+                url_text = url_text[:42] + "..."
+            self.live_url_label.configure(text=f"|  {url_text}")
         
-        self.add_log(f"Modo {'Stream' if is_stream else 'Video'} detectado. UI actualizada.")
+        mode_desc = "Streaming LIVE" if is_live else ("YouTube VOD" if is_stream else "Video Local")
+        self.add_log(f"Modo {mode_desc} detectado. UI actualizada.")
 
     def _blink_live_indicator(self):
         """Efecto de parpadeo para el punto rojo del indicador."""
@@ -569,7 +629,9 @@ class VisionApp(ctk.CTk):
     def browse_file(self):
         path = tk.filedialog.askopenfilename()
         if path:
-            self.url_entry.delete(0, "end"); self.url_entry.insert(0, path)
+            self.url = path
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, path)
             self.change_stream()
 
     def add_log(self, msg):
@@ -676,7 +738,47 @@ class VisionApp(ctk.CTk):
 
     def clear_zones(self): self.zones = []; self._save_config()
     def _on_video_click(self, e): 
-        if self.is_drawing_zone: self.current_zone.append(((e.x-self._img_offset_x)/self._display_w, (e.y-self._img_offset_y)/self._display_h))
+        if self.is_drawing_zone: 
+            self.current_zone.append(((e.x-self._img_offset_x)/self._display_w, (e.y-self._img_offset_y)/self._display_h))
+            return
+
+        # Si no estamos dibujando zonas, intentamos "Lock-on" a un objeto
+        if not self.last_detections:
+            self.locked_track_id = None
+            return
+
+        # Convertir clic a coordenadas de frame original
+        try:
+            h_frame, w_frame = self.raw_frame.shape[:2]
+            nx = (e.x - self._img_offset_x) / self._display_w
+            ny = (e.y - self._img_offset_y) / self._display_h
+            fx, fy = nx * w_frame, ny * h_frame
+
+            # Si ya hay uno bloqueado, cualquier clic fuera o en otro sitio libera el bloqueo
+            # a menos que cliquemos específicamente en otro objeto.
+            found_new = None
+            for d in self.last_detections:
+                x1, y1, x2, y2 = d["bbox"]
+                if x1 <= fx <= x2 and y1 <= fy <= y2:
+                    if d.get("track_id") is not None:
+                        found_new = d["track_id"]
+                        break
+            
+            if found_new is not None:
+                if self.locked_track_id == found_new:
+                    self.locked_track_id = None # Alternar: Desbloquear si clicamos el mismo
+                    self.add_log("Focus Mode deshabilitado.")
+                else:
+                    self.locked_track_id = found_new
+                    self.focus_lost_cnt = 0
+                    self.add_log(f"Focus Mode: Siguiendo ID {self.locked_track_id}")
+            else:
+                if self.locked_track_id is not None:
+                    self.locked_track_id = None
+                    self.add_log("Focus Mode deshabilitado (clic fuera).")
+        except Exception as _e:
+            print(f"Error detectando objeto por clic: {_e}")
+
     def _on_video_right_click(self, e):
         if self.is_drawing_zone and len(self.current_zone) >= 3:
             self.zones.append(self.current_zone); self.current_zone = []; self.toggle_zone_drawing(); self._save_config()

@@ -209,30 +209,48 @@ class VisualPainter:
 
         canvas.create_text(padding, 20, text=f"MÁXIMO: {max(history)}", fill="#10b981", anchor="nw", font=("Arial", 8, "bold"))
     @staticmethod
-    def draw_detections(frame, detections):
+    def draw_detections(frame, detections, is_focus=False):
         """Dibuja cajas y etiquetas de detección sobre el frame."""
+        h, w = frame.shape[:2]
+        
+        # Indicador de Modo Focus
+        if is_focus:
+            # Texto parpadeante o fijo en la esquina superior
+            cv2.rectangle(frame, (10, 10), (220, 45), (0, 0, 0), -1)
+            cv2.rectangle(frame, (10, 10), (220, 45), (0, 255, 255), 2)
+            cv2.putText(frame, "TRACKING FOCUS ACTIVE", (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
             label = d["label"]
             conf = d["confidence"]
             cls_id = d["class_id"]
+            t_id = d.get("track_id")
             
-            # Color: Cyan para modelos custom (>1000), Blue/Theme para base
-            color = (255, 255, 0) if cls_id >= 1000 else (233, 165, 14) # Un azul/celeste estético
+            # Color: Amarillo brillante para foco, Cyan para custom, Blue para base
+            if is_focus:
+                color = (0, 215, 255) # Dorado/Amarillo Focus
+                thick = 3
+            else:
+                color = (255, 255, 0) if cls_id >= 1000 else (233, 165, 14)
+                thick = 2
             
             # Dibujar Caja
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
             
             # Dibujar Etiqueta (Tag)
-            tag = f"{label.upper()} {conf:.2f}"
+            id_txt = f" ID:{t_id}" if t_id is not None else ""
+            tag = f"{label.upper()}{id_txt} {conf:.2f}"
+            if is_focus: tag = f"[ FOCUS ] {tag}"
+            
             font = cv2.FONT_HERSHEY_SIMPLEX
             f_scale = 0.5
-            thick = 1
-            (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick)
+            thick_txt = 2 if is_focus else 1
+            (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick_txt)
             
             # Fondo del tag
-            cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 10, y1), color, -1)
+            cv2.rectangle(frame, (x1, y1 - th - 12), (x1 + tw + 10, y1), color, -1)
             # Texto del tag (Negro sobre fondo de color)
-            cv2.putText(frame, tag, (x1 + 5, y1 - 7), font, f_scale, (0, 0, 0), 2)
+            cv2.putText(frame, tag, (x1 + 5, y1 - 8), font, f_scale, (0, 0, 0), thick_txt)
             
         return frame

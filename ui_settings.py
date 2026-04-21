@@ -69,7 +69,7 @@ class SettingsWindow(ctk.CTkToplevel):
                                          command=self._test_telegram)
         self.btn_test_tg.pack(side="left", padx=2)
         
-        lbl_help.pack(pady=(0, 5), padx=10, anchor="w")
+        # Eliminado lbl_help inexistente que causaba error
         
         self.lbl_status = ctk.CTkLabel(frame_notif, text="Estado: Listo", font=("", 9), text_color="#94a3b8")
         self.lbl_status.pack(padx=10, anchor="w")
@@ -92,14 +92,31 @@ class SettingsWindow(ctk.CTkToplevel):
         self.appearance_mode.set(ctk.get_appearance_mode())
         self.appearance_mode.pack(side="right")
 
-        # Botón Guardar
-        ctk.CTkButton(self, text="💾 Guardar Cambios", font=ctk.CTkFont(weight="bold"), 
+        # Fila de Botones de Acción
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(pady=20, padx=20, fill="x")
+        
+        ctk.CTkButton(btn_row, text="💾 Guardar Ajustes", font=ctk.CTkFont(weight="bold"), 
                        fg_color="#38bdf8", hover_color="#0ea5e9", text_color="#000",
-                       command=self._save).pack(pady=20, padx=20, fill="x")
+                       command=self._save).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        
+        ctk.CTkButton(btn_row, text="🧹 Limpiar Todo", font=ctk.CTkFont(weight="bold"), 
+                       fg_color="#dc2626", hover_color="#991b1b", text_color="#fff",
+                       command=self._clear_config).pack(side="left", expand=True, fill="x", padx=(5, 0))
 
     def _section_label(self, text):
         lbl = ctk.CTkLabel(self, text=text, font=ctk.CTkFont(size=10, weight="bold"), text_color="#64748b")
         lbl.pack(padx=20, anchor="w")
+
+    def _clear_config(self):
+        """Limpia los campos de la interfaz y vacía la configuración en el motor."""
+        if messagebox.askyesno("Confirmar Limpieza", "¿Estás seguro de que quieres borrar todos los secretos y webhooks?"):
+            self.entry_webhook.delete(0, "end")
+            self.entry_tg_token.delete(0, "end")
+            self.entry_tg_id.delete(0, "end")
+            self.engine.update_config("", "", "")
+            self.lbl_status.configure(text="✅ Configuración limpiada", text_color="#4ade80")
+            messagebox.showinfo("Limpieza", "Se han borrado las credenciales correctamente.")
 
     def _save(self):
         webhook = self.entry_webhook.get().strip()
@@ -119,7 +136,8 @@ class SettingsWindow(ctk.CTkToplevel):
             messagebox.showwarning("Aviso", "Introduce el Token y el Chat ID para probar.")
             return
             
-        self.lbl_status.configure(text="Enviando prueba...", text_color="#38bdf8")
+        self.lbl_status.configure(text="⏳ Enviando prueba...", text_color="#38bdf8")
+        self.btn_test_tg.configure(state="disabled", text="...")
         self.update() # Forzar refresco UI
 
         # Actualizar temporalmente en el motor para la prueba
@@ -129,14 +147,20 @@ class SettingsWindow(ctk.CTkToplevel):
         import threading
         def run_test():
             try:
-                self.engine._send_to_telegram("<b>Prueba de Conexión</b>\n¡Hola! Tu conexión desde Visión AI se ha establecido correctamente usando el modo HTML. 🚀")
+                # Usar etiquetas que no serán escapadas erróneamente en event_engine
+                self.engine._send_to_telegram("PRUEBA DE CONEXIÓN\n¡Hola! Tu conexión desde Visión AI se ha establecido correctamente. 🚀")
                 
                 # Actualizar UI desde el hilo principal
-                if self.engine.last_error:
-                    self.after(0, lambda: self.lbl_status.configure(text=f"Error: {self.engine.last_error}", text_color="#f87171"))
-                else:
-                    self.after(0, lambda: self.lbl_status.configure(text="✅ Mensaje enviado con éxito", text_color="#4ade80"))
+                def update_done():
+                    self.btn_test_tg.configure(state="normal", text="⚡ Prueba")
+                    if self.engine.last_error:
+                        self.lbl_status.configure(text=f"Error: {self.engine.last_error}", text_color="#f87171")
+                    else:
+                        self.lbl_status.configure(text="✅ Mensaje enviado con éxito", text_color="#4ade80")
+                
+                self.after(0, update_done)
             except Exception as e:
                 self.after(0, lambda: self.lbl_status.configure(text=f"Error Fatal: {str(e)}", text_color="#f87171"))
+                self.after(0, lambda: self.btn_test_tg.configure(state="normal", text="⚡ Prueba"))
 
         threading.Thread(target=run_test, daemon=True).start()
