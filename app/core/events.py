@@ -84,6 +84,8 @@ class EventEngine:
             if op == '>' and count > val: triggered = True
             elif op == '<' and count < val: triggered = True
             elif op == '==' and count == val: triggered = True
+            elif op == '>=' and count >= val: triggered = True
+            elif op == '<=' and count <= val: triggered = True
             elif op == 'Total >' and self.cumulative_counts.get(rule['class_target'], 0) > val: triggered = True
             
             if triggered:
@@ -109,23 +111,31 @@ class EventEngine:
                                             lambda img, m, ok: self._send_external_alerts(rule, m, img) if ok else None)
 
     def _send_external_alerts(self, rule, msg, frame=None):
-        # 1. Guardar Evidencia Local
+        action = rule.get('action', 'log')
+        
+        # 1. Guardar Evidencia Local (siempre que haya frame)
         evidence_path = ""
         if frame is not None:
             fname = f"EV_{int(time.time())}_{rule['name'].replace(' ', '_')}.jpg"
             evidence_path = os.path.join(self.evidence_dir, fname)
-            cv2.imwrite(evidence_path, frame)
+            try:
+                cv2.imwrite(evidence_path, frame)
+            except Exception:
+                evidence_path = ""
         
         # 2. Registrar en SQLite
         self.db.log_event(rule['name'], msg, evidence_path)
         
         # 3. TTS (Síntesis de Voz)
-        self._speak(msg)
+        if action in ["tts", "all"]:
+            self._speak(msg)
 
-        # 4. Notificaciones Externas
-        if rule['action'] in ["webhook", "all"] and self.config["webhook_url"]:
+        # 4. Webhook
+        if action in ["webhook", "all"] and self.config["webhook_url"]:
             threading.Thread(target=lambda: requests.post(self.config["webhook_url"], json={"msg": msg}), daemon=True).start()
-        if rule['action'] in ["telegram", "all"] and self.config["telegram_token"]:
+        
+        # 5. Telegram (con foto si hay evidencia)
+        if action in ["telegram", "all"] and self.config["telegram_token"]:
             threading.Thread(target=self._send_to_telegram, args=(msg, evidence_path), daemon=True).start()
 
     def _speak(self, text):

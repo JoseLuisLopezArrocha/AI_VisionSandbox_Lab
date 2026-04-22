@@ -266,7 +266,7 @@ class VisionApp(ctk.CTk):
         ctk.CTkButton(f_row, text="Filtro", command=self.open_class_filter, height=24).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
         ctk.CTkButton(self.sidebar, text="🔔 Eventos e Hitos", command=self.open_events_config, 
-                      fg_color="#ea580c", hover_color="##c2410c", height=32).pack(pady=(5, 5), padx=20, fill="x")
+                      fg_color="#ea580c", hover_color="#c2410c", height=32).pack(pady=(5, 5), padx=20, fill="x")
 
         # CAPTURA DATASET (Inline — sin popup)
         self.capture_frame = ctk.CTkFrame(self.sidebar, fg_color="#1e293b", border_width=1, border_color="#16a34a")
