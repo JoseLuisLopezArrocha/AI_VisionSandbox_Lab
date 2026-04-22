@@ -266,64 +266,53 @@ class VisionApp(ctk.CTk):
         ctk.CTkButton(f_row, text="Filtro", command=self.open_class_filter, height=24).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
         ctk.CTkButton(self.sidebar, text="🔔 Eventos e Hitos", command=self.open_events_config, 
-                      fg_color="#ea580c", hover_color="#c2410c", height=32).pack(pady=(5, 5), padx=20, fill="x")
+                      fg_color="#ea580c", hover_color="#c2410c", height=28).pack(pady=(5, 5), padx=20, fill="x")
 
-        # CAPTURA DATASET (Inline — sin popup)
-        self.capture_frame = ctk.CTkFrame(self.sidebar, fg_color="#1e293b", border_width=1, border_color="#16a34a")
-        self.capture_frame.pack(pady=(0, 10), padx=20, fill="x")
+        # CAPTURA DATASET (Compacto: entrada + botones en una sola fila)
+        cap_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        cap_row.pack(fill="x", padx=20, pady=(0, 5))
         
-        ctk.CTkLabel(self.capture_frame, text="📸 CAPTURA DATASET", 
-                     font=ctk.CTkFont(size=10, weight="bold"), text_color="#16a34a").pack(pady=(5, 2))
-        
-        self.capture_entry = ctk.CTkEntry(self.capture_frame, placeholder_text="Nombre: taxi, bache...", height=26)
-        self.capture_entry.pack(pady=2, padx=8, fill="x")
+        self.capture_entry = ctk.CTkEntry(cap_row, placeholder_text="Clase: taxi, bache...", height=26)
+        self.capture_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.capture_entry.bind("<Return>", lambda _: self.take_capture())
         
-        cap_btns = ctk.CTkFrame(self.capture_frame, fg_color="transparent")
-        cap_btns.pack(pady=(2, 5), padx=8, fill="x")
+        ctk.CTkButton(cap_row, text="📸", command=self.take_capture,
+                      fg_color="#16a34a", hover_color="#15803d", height=26, width=32).pack(side="left", padx=(0, 2))
         
-        ctk.CTkButton(cap_btns, text="📸 Capturar", command=self.take_capture,
-                      fg_color="#16a34a", hover_color="#15803d", height=26,
-                      font=ctk.CTkFont(size=11)).pack(side="left", fill="x", expand=True, padx=(0, 3))
-        
-        ctk.CTkButton(cap_btns, text="📦 ZIP", command=self.export_dataset_zip,
-                      fg_color="#6366f1", hover_color="#4f46e5", height=26, width=55,
-                      font=ctk.CTkFont(size=11)).pack(side="right")
+        ctk.CTkButton(cap_row, text="📦", command=self.export_dataset_zip,
+                      fg_color="#6366f1", hover_color="#4f46e5", height=26, width=32).pack(side="left")
 
         # ZONAS
         self._section("ZONAS")
         z_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        z_btns.pack(pady=(0, 10), padx=20, fill="x")
+        z_btns.pack(pady=(0, 5), padx=20, fill="x")
         self.draw_btn = ctk.CTkButton(z_btns, text="Pintar", command=self.toggle_zone_drawing, width=100, height=28)
         self.draw_btn.pack(side="left", padx=(0, 5))
         ctk.CTkButton(z_btns, text="Borrar", command=self.clear_zones, fg_color="#dc2626", height=28).pack(side="left", fill="x", expand=True)
 
-        # APARIENCIA (Botones de icono ☀️/🌙)
-        self._section("APARIENCIA")
-        app_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        app_frame.pack(pady=(0, 20), padx=20, fill="x")
+        # --- BLOQUE INFERIOR FIJO (Tema + Hardware) ---
+        bottom = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x", padx=20, pady=(5, 10))
         
-        self.btn_dark = ctk.CTkButton(app_frame, text="🌙", width=40, height=32, fg_color="#1e293b", hover_color="#334155",
-                                      command=lambda: ctk.set_appearance_mode("Dark"))
-        self.btn_dark.pack(side="left", expand=True, padx=2)
+        # Hardware
+        self.hw_label = ctk.CTkLabel(bottom, 
+                                     text=f"⚡ {self.detector.hardware_diag['gpu_name'][:20]} | {self.detector.hardware_diag['best_backend'].upper()}", 
+                                     font=ctk.CTkFont(size=10), text_color="#10b981")
+        self.hw_label.pack(fill="x", pady=(0, 6))
         
-        self.btn_light = ctk.CTkButton(app_frame, text="☀️", width=40, height=32, fg_color="#e2e8f0", hover_color="#cbd5e1", text_color="black",
-                                       command=lambda: ctk.set_appearance_mode("Light"))
-        self.btn_light.pack(side="left", expand=True, padx=2)
-
-        # SELLO ANTIGRAVITY (Al final de la sidebar, interactivo e inferior izquierda)
-        self.sidebar.grid_rowconfigure(20, weight=1) # Espaciador para empujar al fondo
-        # UI: Hardware status label (e.g. GPU: Intel, Backend: OpenVINO)
-        self.hw_label = ctk.CTkLabel(self.sidebar, text=f"HARDWARE: {self.detector.hardware_diag['gpu_name'][:15]}", font=ctk.CTkFont(size=10), text_color="#10b981")
-        self.hw_label.pack(side="bottom", pady=10)
-
-        spacer = ctk.CTkLabel(self.sidebar, text="")
-        spacer.pack(expand=True, fill="both")
+        # Tema + Créditos en una fila
+        theme_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        theme_row.pack(fill="x")
         
-        self.antigravity_btn = ctk.CTkLabel(self.sidebar, text="✨ Creado con Antigravity", 
-                                            font=ctk.CTkFont(size=11, slant="italic"), 
+        ctk.CTkButton(theme_row, text="🌙", width=32, height=26, fg_color="#1e293b", hover_color="#334155",
+                      command=lambda: ctk.set_appearance_mode("Dark")).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(theme_row, text="☀️", width=32, height=26, fg_color="#e2e8f0", hover_color="#cbd5e1", text_color="black",
+                      command=lambda: ctk.set_appearance_mode("Light")).pack(side="left", padx=(0, 8))
+        
+        self.antigravity_btn = ctk.CTkLabel(theme_row, text="✨ Antigravity", 
+                                            font=ctk.CTkFont(size=10, slant="italic"), 
                                             text_color="#38bdf8", cursor="hand2")
-        self.antigravity_btn.pack(pady=15, padx=20, anchor="sw")
+        self.antigravity_btn.pack(side="right")
         self.antigravity_btn.bind("<Button-1>", lambda e: webbrowser.open("https://antigravity.google"))
 
     def _section(self, text):

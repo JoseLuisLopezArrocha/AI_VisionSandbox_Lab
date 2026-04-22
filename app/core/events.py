@@ -70,10 +70,16 @@ class EventEngine:
             log_error("EXE-COR-EVT-05", f"Error guardando reglas: {e}")
 
     def evaluate(self, detections, frame=None, app_log_callback=None, evidence_callback=None):
-        """Evalúa reglas en tiempo real."""
+        """
+        Evalúa reglas en tiempo real sobre la ráfaga de detecciones actual.
+        - detections: Lista de objetos detectados en el frame actual.
+        - frame: Imagen RAW para captura de evidencia.
+        - app_log_callback: Función para registrar logs en la UI.
+        """
         if not self.rules: return
         now = time.time()
         for rule in self.rules:
+            # Respetar tiempo de espera entre alertas (cooldown)
             if now - self.last_triggered.get(rule['id'], 0) < rule['cooldown']:
                 continue
                 
@@ -97,7 +103,7 @@ class EventEngine:
             self.db.log_detections(detections)
 
     def _trigger_action(self, rule, current_count, frame, app_log_callback, evidence_callback):
-        """Dispara acciones y validación."""
+        """Orquesta la respuesta al hito: logs, validación IA y alertas externas."""
         zona_text = "Global" if rule['zone_target'] == -1 else f"Zona {rule['zone_target'] + 1}"
         msg = f"Hito: '{rule['name']}' -> {current_count} {rule['class_target']} en {zona_text}."
         
@@ -105,12 +111,15 @@ class EventEngine:
         
         val_config = rule.get("validator", {})
         if val_config.get("provider") == "None":
+            # Sin validación secundaria: disparar alertas directamente
             self._send_external_alerts(rule, msg, frame)
         elif frame is not None:
+            # Validación vía VLM (Asíncrona)
              SecondaryValidator.validate_async(frame, val_config, rule["name"], app_log_callback, 
                                             lambda img, m, ok: self._send_external_alerts(rule, m, img) if ok else None)
 
     def _send_external_alerts(self, rule, msg, frame=None):
+        """Gestiona el envío de evidencias, logs a SQLite, alertas Telegram/Webhooks y TTS."""
         action = rule.get('action', 'log')
         
         # 1. Guardar Evidencia Local (siempre que haya frame)
@@ -123,7 +132,7 @@ class EventEngine:
             except Exception:
                 evidence_path = ""
         
-        # 2. Registrar en SQLite
+        # 2. Registrar en SQLite (Persistencia Analítica)
         self.db.log_event(rule['name'], msg, evidence_path)
         
         # 3. TTS (Síntesis de Voz)

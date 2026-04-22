@@ -1,4 +1,4 @@
-# 🛰️ Visión AI Engine - Resumen Maestro del Proyecto v3.0
+# 🛰️ Visión AI Engine - Resumen Maestro del Proyecto v3.5
 
 Este documento constituye la **fuente de verdad definitiva** para el proyecto "02 Proyecto Vision Streaming". Refleja la arquitectura modular profesional y las capacidades avanzadas de analítica.
 
@@ -28,12 +28,25 @@ Integración de anuncios por voz. El sistema puede anunciar eventos críticos po
 ### 📈 Seguimiento de Trayectorias (Trails)
 El motor visual (`VisualPainter`) ahora dibuja **estelas de movimiento** para cada objeto con Tracking ID. Estas trayectorias están codificadas por colores y permiten visualizar el flujo de movimiento de los elementos en escena.
 
+### 🔔 Hitos Dinámicos y Flexibles
+El sistema de eventos ha sido rediseñado para permitir una configuración total por parte del usuario:
+- **Operadores lógicos**: `>`, `<`, `==`, `>=`, `<=`, `Total >`.
+- **Acciones granulares**: Registro local, Telegram (con foto), Webhooks o Voz (TTS).
+- **Control de Cooldown**: Evita la saturación de alertas con tiempos de espera configurables.
+
 ### 🐳 Contenerización (Docker)
 Incluye un `Dockerfile` optimizado con todas las dependencias de sistema (OpenCV, Tkinter, OpenVINO) para facilitar el despliegue en entornos aislados.
 
 ---
 
-## 🛠️ 3. Componentes Clave (Nomenclatura Actualizada)
+## 🎨 3. Interfaz de Usuario (UI/UX)
+*   **Sidebar Inteligente**: HUD compacto que agrupa las herramientas de captura, zonas y análisis en un diseño de una sola columna sin necesidad de scroll.
+*   **Dashboard de Analítica**: Canvas en tiempo real para visualización de tendencias y distribución de clases.
+*   **Diagnóstico de Hardware**: Panel inferior que muestra en tiempo real la GPU detectada y el backend de inferencia activo (ej: OpenVINO / CPU).
+
+---
+
+## 🛠️ 4. Componentes Clave
 
 | Componente | Ruta | Función |
 | :--- | :--- | :--- |
@@ -41,14 +54,8 @@ Incluye un `Dockerfile` optimizado con todas las dependencias de sistema (OpenCV
 | **Detector** | `app/core/detector.py` | Inferencia YOLO/RT-DETR y prompts YOLO-World. |
 | **Eventos** | `app/core/events.py` | Evaluación de reglas, disparo de alertas y **SQLite Logging**. |
 | **Painter** | `app/utils/painter.py` | Renderizado de cajas, zonas, mapas de calor y **trayectorias**. |
-| **DB Manager**| `app/utils/db_manager.py` | **(NUEVO)** Gestión de base de datos SQLite. |
+| **DB Manager**| `app/utils/db_manager.py` | Gestión de base de datos SQLite. |
 | **Validator** | `app/core/validator.py` | Validación secundaria vía VLMs (Gemma/SAM placeholders). |
-
----
-
-## ⚙️ 4. Configuración y Secretos
-*   `.env`: Almacena `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` y `WEBHOOK_URL`.
-*   `requirements.txt`: Incluye `pyttsx3` para voz y `python-dotenv` para secretos.
 
 ---
 
