@@ -11,9 +11,9 @@ import webbrowser
 import platform
 import importlib.metadata
 from PIL import Image, ImageTk
-from vision_engine import VisionEngine
-from detector import ObjectDetector
-from vision_utils import MODELS_DIR, ensure_dataset_structure, get_next_capture_filename
+from ..core.engine import VisionEngine
+from ..core.detector import ObjectDetector
+from ..utils.helpers import MODELS_DIR, ensure_dataset_structure, get_next_capture_filename, log_error
 
 # ===================================================================
 #  COMPONENTES DE INTERFAZ (UI)

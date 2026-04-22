@@ -10,6 +10,9 @@
 
 ## 🚀 Funcionalidades Principales
 
+> [!NOTE]
+> **Filosofía del Proyecto:** Esta aplicación ha sido desarrollada para uso personal y sin ánimo de lucro. Su arquitectura está diseñada para ser extremadamente fácil de ejecutar ("Plug & Play") sin requerir configuraciones complejas de servidores o bases de datos externas, priorizando la accesibilidad para cualquier usuario.
+
 ### 🧠 Inteligencia de Detección
 - **Arquitectura Modular:** Soporte dinámico para modelos YOLOv8, YOLOv11 y arquitecturas personalizadas (.pt).
 - **YOLO-World Integration:** Detección "Zero-Shot" mediante prompts de texto (ej: detecta "un paraguas rojo" sin entrenar el modelo).
@@ -29,6 +32,16 @@
 
 ### 🛠️ Herramientas de Entrenamiento
 - **Dataset Capturer:** Herramienta integrada para capturar frames y realizar anotaciones (Bounding Boxes) manualmente, facilitando el re-entrenamiento de modelos propios.
+
+---
+
+## 🏗️ Mejoras Arquitectónicas (v2.5+)
+
+Para garantizar la estabilidad y el rendimiento en sistemas de escritorio, el motor cuenta con:
+- **Tipado Estricto (Type Hinting):** Todo el núcleo está tipado, mejorando la seguridad en tiempo de ejecución.
+- **Optimización de Interfaz (Canvas):** Renderizado inteligente de métricas sin parpadeos, reduciendo la carga de CPU.
+- **Detección de Hardware Robusta:** Identificación automática y a prueba de fallos de aceleradores (CUDA, OpenVINO, DirectML).
+- **Gestor de Errores Simplificado:** Alertas claras en consola diseñadas para facilitar el uso diario sin saturar el sistema con logs complejos.
 
 ---
 

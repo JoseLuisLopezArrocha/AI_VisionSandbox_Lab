@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 from collections import Counter
-from vision_utils import ZONE_COLORS
+from .helpers import ZONE_COLORS
 
 class VisualPainter:
     """
