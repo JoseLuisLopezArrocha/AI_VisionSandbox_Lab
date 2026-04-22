@@ -1,84 +1,58 @@
-# 🛰️ Visión AI Engine - Resumen Maestro del Proyecto v2.5
+# 🛰️ Visión AI Engine - Resumen Maestro del Proyecto v3.0
 
-Este documento constituye la **fuente de verdad definitiva** para el proyecto "02 Proyecto Vision Streaming". Está diseñado para permitir que cualquier desarrollador o agente de IA comprenda la arquitectura, el flujo de datos y la responsabilidad de cada componente sin necesidad de auditar el código fuente completo.
-
----
-
-## 📖 1. Visión General del Proyecto
-**Visión AI Engine** es un Dashboard de monitorización avanzado que integra visión artificial en tiempo real sobre streams de vídeo (YouTube, RTSP, archivos locales). El sistema no solo detecta objetos, sino que permite definir zonas analíticas, configurar hitos inteligentes con validación mediante IAs externas (VLMs) y generar telemetría detallada.
+Este documento constituye la **fuente de verdad definitiva** para el proyecto "02 Proyecto Vision Streaming". Refleja la arquitectura modular profesional y las capacidades avanzadas de analítica.
 
 ---
 
-## 🏗️ 2. Arquitectura de Software
-El proyecto sigue un diseño **modular y desacoplado**, separando la lógica de adquisición, el motor de inferencia, la gestión de eventos y la capa de presentación.
+## 🏗️ 1. Arquitectura de Software (Modular)
+El proyecto se ha reestructurado como un paquete Python profesional dentro de la carpeta `app/`, eliminando la estructura plana anterior para mejorar la mantenibilidad.
 
-### Diagrama de Flujo de Datos (Data Pipeline)
-1.  **Adquisición** (`VisionEngine`): Captura de frames asíncrona.
-2.  **Procesamiento** (`ObjectDetector`): Inferencia YOLO/RT-DETR + Modelos Custom.
-3.  **Lógica de Negocio** (`EventEngine`): Evaluación de reglas y condiciones (hitos).
-4.  **Validación** (`SecondaryValidator`): Confirmación vía Ollama/HF si el hito lo requiere.
-5.  **Persistencia** (`DataLogger`): Registro ligero de telemetría en CSV (Optimizado para uso personal).
-6.  **Visualización** (`VisualPainter`): Dibujado estético y actualización de Dashboard (Main) optimizado para evitar parpadeos y picos de CPU.
+### 📂 Estructura de Paquetes
+*   `app/core/`: Motores lógicos (Detección, Captura de Vídeo, Eventos, Hardware).
+*   `app/ui/`: Interfaz gráfica basada en CustomTkinter (Ventana Principal, Ajustes, Eventos).
+*   `app/utils/`: Utilidades transversales (Pintado visual, Base de Datos, Loggers, Helpers).
 
 ---
 
-## 📂 3. Estructura de Archivos y Responsabilidades
+## 🚀 2. Capacidades Avanzadas (Implementadas)
 
-### 📁 Directorios Raíz
-*   `models/`: Almacén central de pesos (.pt). Organizado por subcarpetas (Familias de modelos).
-*   `models/custom/`: Modelos especializados (ej: detección de taxis) que se ejecutan en paralelo al principal.
-*   `telemetry_logs/`: Carpeta donde se guardan los archivos CSV diarios de detecciones.
-*   `datasets/`: (Opcional) Estructuras para entrenamiento de nuevos modelos.
-*   `venv/`: Entorno virtual Python con dependencias aisladas.
+### 📊 Analítica Persistente (SQLite)
+A diferencia del CSV básico, el sistema ahora integra un **DBManager** que registra cada detección y evento en una base de datos SQLite local (`telemetry_logs/vision_analytics.db`). Permite realizar consultas históricas complejas sobre conteos, zonas y trackings.
 
-### 📄 Archivos de Código (Core)
-| Archivo | Responsabilidad Principal |
-| :--- | :--- |
-| `main.py` | **Orquestador Central**. Levanta el Dashboard, gestiona el hilo de vídeo y coordina todos los módulos. |
-| `detector.py` | **Motor de Inferencia**. Carga pesos dinámicamente, filtra clases y maneja arquitecturas YOLOv8-v11 y RT-DETR. |
-| `vision_engine.py` | **Driver de Vídeo**. Maneja la conexión con CamGear (YouTube) y VideoCapture (Local). |
-| `visual_painter.py` | **Capa Estética**. Dibuja cajas, polígonos de zonas, mapas de calor y gráficos del Dashboard (Canvas). |
-| `event_engine.py` | **Cerebro de Eventos**. Evalúa si se cumplen condiciones (ej: >5 personas en Zona 1). |
-| `secondary_validator.py`| **Validador IA**. Consulta APIs de Ollama o Hugging Face para validaciones críticas asíncronas. |
-| `data_logger.py` | **Grabador de Telemetría**. Escribe en CSV el estado del sistema segundo a segundo (Uso ligero). |
-| `vision_utils.py` | **Utilidades**. Constantes de color, rutas de archivos y carga/guardado de configuraciones JSON. |
-| `error_handler.py`| **Manejador de Errores**. Centraliza alertas por consola para un diagnóstico rápido y directo. |
+### 📸 Evidencia Visual Automática
+Cuando un hito/evento se activa, el sistema guarda automáticamente un frame de evidencia en `telemetry_logs/evidences/`. Estas imágenes se vinculan en la base de datos y pueden ser enviadas opcionalmente vía Telegram.
 
-### 📄 Componentes de Interfaz (UI)
-*   `ui_components.py`: Contiene ventanas modales (`ClassFilterWindow`, `AddModelPopup`, `InfoPopup`).
-*   `ui_events.py`: Interfaz de usuario para el gestor de Hitos y validadores secundarios.
+### 🔊 Síntesis de Voz (TTS)
+Integración de anuncios por voz. El sistema puede anunciar eventos críticos por los altavoces (ej: *"Persona detectada en Zona de Peligro"*), mejorando la accesibilidad y la respuesta en tiempo real.
 
-### 📄 Configuración y Persistencia
-*   `zones.json`: Guarda polígonos de zonas y filtros de clase asociados a cada URL de vídeo.
-*   `events_config.json`: Guarda las reglas de eventos configuradas por el usuario.
-*   `requirements.txt`: Lista de dependencias (ultralytics, customtkinter, vidgear, opencv).
+### 📈 Seguimiento de Trayectorias (Trails)
+El motor visual (`VisualPainter`) ahora dibuja **estelas de movimiento** para cada objeto con Tracking ID. Estas trayectorias están codificadas por colores y permiten visualizar el flujo de movimiento de los elementos en escena.
+
+### 🐳 Contenerización (Docker)
+Incluye un `Dockerfile` optimizado con todas las dependencias de sistema (OpenCV, Tkinter, OpenVINO) para facilitar el despliegue en entornos aislados.
 
 ---
 
-## 🧠 4. Sistema de Inteligencia y Modelos
-El proyecto soporta **Familias de Modelos**. Una familia es una carpeta dentro de `models/` que contiene archivos `.pt`.
-- El sistema escanea estas carpetas y genera alias automáticamente (ej: "YOL 01").
-- **Metadatos**: Cada carpeta puede tener un `metadata.json` para definir si el modelo es COCO o tiene clases personalizadas.
-- **Modelos Custom**: Cualquier modelo en `models/custom/` se cargará como "Detector Secundario", funcionando en tándem con el principal.
+## 🛠️ 3. Componentes Clave (Nomenclatura Actualizada)
+
+| Componente | Ruta | Función |
+| :--- | :--- | :--- |
+| **Orquestador** | `main.py` | Punto de entrada. Lanza la `VisionApp`. |
+| **Detector** | `app/core/detector.py` | Inferencia YOLO/RT-DETR y prompts YOLO-World. |
+| **Eventos** | `app/core/events.py` | Evaluación de reglas, disparo de alertas y **SQLite Logging**. |
+| **Painter** | `app/utils/painter.py` | Renderizado de cajas, zonas, mapas de calor y **trayectorias**. |
+| **DB Manager**| `app/utils/db_manager.py` | **(NUEVO)** Gestión de base de datos SQLite. |
+| **Validator** | `app/core/validator.py` | Validación secundaria vía VLMs (Gemma/SAM placeholders). |
 
 ---
 
-## 📊 5. Análisis y Telemetría
-El Dashboard inferior muestra:
-- **Gráfico de Barras**: Distribución actual de objetos (Top 6).
-- **Gráfico de Línea**: Tendencia de conteo total en los últimos 30 segundos.
-- **Métricas de Zona**: Conteo independiente por cada polígono dibujado.
-- **Logs de Sistema**: Registro en tiempo real de eventos y acciones de validación.
+## ⚙️ 4. Configuración y Secretos
+*   `.env`: Almacena `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` y `WEBHOOK_URL`.
+*   `requirements.txt`: Incluye `pyttsx3` para voz y `python-dotenv` para secretos.
 
 ---
 
-## 🗺️ 6. Hoja de Ruta (Next Steps)
-1.  **Acciones Reales**: Implementar el envío efectivo de Webhooks y Emails (actualmente solo loguean).
-2.  **Seguimiento de Trayectorias**: Implementar algoritmos de Tracking (DeepSORT/ByteTrack) para medir tiempos de permanencia.
-3.  **Exportación PDF**: Generar reportes diarios automáticos basados en los logs CSV.
-4.  **Encriptación**: Proteger las API Keys de los validadores secundarios en el JSON.
-*(Completado)* **Optimización del Core**: Añadido Type Hinting completo, optimización del Canvas y detección robusta de hardware.
-
----
-> [!TIP]
-> **Nota para Agentes**: Al realizar modificaciones, priorizar siempre el mantenimiento de la asincronía en el hilo de vídeo (`update_video` en `main.py`) para evitar congelamientos en el Dashboard.
+## 🗺️ 5. Hoja de Roadmap Actualizado
+1.  **Dashboard Web**: Crear una API FastAPI que consuma la base de datos SQLite para mostrar gráficas en un navegador.
+2.  **Control Inbound**: Permitir que el bot de Telegram responda a comandos (ej: "/status" o "/screenshot").
+3.  **Filtrado por Trayectoria**: Disparar eventos solo si un objeto cruza una línea en una dirección específica (Cross-line counting).

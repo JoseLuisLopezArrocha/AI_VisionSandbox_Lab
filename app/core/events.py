@@ -11,6 +11,7 @@ import requests
 import cv2
 from .validator import SecondaryValidator
 from ..utils.helpers import EVENTS_CONFIG, LOGS_DIR, log_error
+from ..utils.db_manager import DBManager
 
 # Intentar cargar variables de entorno
 try:
@@ -40,6 +41,9 @@ class EventEngine:
         
         self.load_rules()
         self.load_stats()
+        self.db = DBManager()
+        self.evidence_dir = os.path.join(LOGS_DIR, "evidences")
+        os.makedirs(self.evidence_dir, exist_ok=True)
         
     def load_rules(self):
         """Carga solo las reglas del JSON."""
@@ -85,6 +89,10 @@ class EventEngine:
             if triggered:
                 self._trigger_action(rule, count, frame, app_log_callback, evidence_callback)
                 self.last_triggered[rule['id']] = now
+            
+        # Registro continuo en DB para analítica (cada frame con detecciones)
+        if detections:
+            self.db.log_detections(detections)
 
     def _trigger_action(self, rule, current_count, frame, app_log_callback, evidence_callback):
         """Dispara acciones y validación."""
@@ -95,22 +103,54 @@ class EventEngine:
         
         val_config = rule.get("validator", {})
         if val_config.get("provider") == "None":
-            self._send_external_alerts(rule, msg)
+            self._send_external_alerts(rule, msg, frame)
         elif frame is not None:
-             SecondaryValidator.validate_async(frame, val_config, rule["name"], app_log_callback, lambda img, m, ok: self._send_external_alerts(rule, m) if ok else None)
+             SecondaryValidator.validate_async(frame, val_config, rule["name"], app_log_callback, 
+                                            lambda img, m, ok: self._send_external_alerts(rule, m, img) if ok else None)
 
-    def _send_external_alerts(self, rule, msg):
+    def _send_external_alerts(self, rule, msg, frame=None):
+        # 1. Guardar Evidencia Local
+        evidence_path = ""
+        if frame is not None:
+            fname = f"EV_{int(time.time())}_{rule['name'].replace(' ', '_')}.jpg"
+            evidence_path = os.path.join(self.evidence_dir, fname)
+            cv2.imwrite(evidence_path, frame)
+        
+        # 2. Registrar en SQLite
+        self.db.log_event(rule['name'], msg, evidence_path)
+        
+        # 3. TTS (Síntesis de Voz)
+        self._speak(msg)
+
+        # 4. Notificaciones Externas
         if rule['action'] in ["webhook", "all"] and self.config["webhook_url"]:
             threading.Thread(target=lambda: requests.post(self.config["webhook_url"], json={"msg": msg}), daemon=True).start()
         if rule['action'] in ["telegram", "all"] and self.config["telegram_token"]:
-            threading.Thread(target=self._send_to_telegram, args=(msg,), daemon=True).start()
+            threading.Thread(target=self._send_to_telegram, args=(msg, evidence_path), daemon=True).start()
 
-    def _send_to_telegram(self, text):
+    def _speak(self, text):
+        """Síntesis de voz ligera (opcional)."""
+        def run():
+            try:
+                import pyttsx3
+                engine = pyttsx3.init()
+                engine.say(text)
+                engine.runAndWait()
+            except: pass
+        threading.Thread(target=run, daemon=True).start()
+
+    def _send_to_telegram(self, text, photo_path=""):
         try:
             token, chat_id = self.config["telegram_token"], self.config["telegram_chat_id"]
             if not token or not chat_id: return
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=10)
+            
+            if photo_path and os.path.exists(photo_path):
+                url = f"https://api.telegram.org/bot{token}/sendPhoto"
+                with open(photo_path, 'rb') as f:
+                    requests.post(url, data={"chat_id": chat_id, "caption": text}, files={"photo": f}, timeout=15)
+            else:
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=10)
         except Exception as e:
             log_error("EXE-COR-EVT-05", f"Error Telegram: {e}")
 

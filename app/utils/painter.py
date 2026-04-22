@@ -208,17 +208,29 @@ class VisualPainter:
             canvas.create_polygon(poly_pts, fill="#10b981", stipple="gray25", outline="")
 
         canvas.create_text(padding, 20, text=f"MÁXIMO: {max(history)}", fill="#10b981", anchor="nw", font=("Arial", 8, "bold"))
+    _track_history = {} # Historial de trayectorias {id: [(x,y), ...]}
+
     @staticmethod
-    def draw_detections(frame, detections, is_focus=False):
-        """Dibuja cajas y etiquetas de detección sobre el frame."""
+    def draw_detections(frame, detections, is_focus=False, show_trails=True):
+        """Dibuja cajas, etiquetas y opcionalmente trayectorias."""
         h, w = frame.shape[:2]
         
         # Indicador de Modo Focus
         if is_focus:
-            # Texto parpadeante o fijo en la esquina superior
             cv2.rectangle(frame, (10, 10), (220, 45), (0, 0, 0), -1)
             cv2.rectangle(frame, (10, 10), (220, 45), (0, 255, 255), 2)
             cv2.putText(frame, "TRACKING FOCUS ACTIVE", (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # Limpiar IDs antiguos del historial para no saturar memoria
+        current_ids = {d.get("track_id") for d in detections if d.get("track_id") is not None}
+        for tid in list(VisualPainter._track_history.keys()):
+            if tid not in current_ids:
+                # Si el ID no aparece en 50 frames, lo borramos (podría reaparecer pero es seguro)
+                if not hasattr(VisualPainter, '_cleanup_cnt'): VisualPainter._cleanup_cnt = {}
+                VisualPainter._cleanup_cnt[tid] = VisualPainter._cleanup_cnt.get(tid, 0) + 1
+                if VisualPainter._cleanup_cnt[tid] > 50:
+                    del VisualPainter._track_history[tid]
+                    del VisualPainter._cleanup_cnt[tid]
 
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
@@ -227,18 +239,29 @@ class VisualPainter:
             cls_id = d["class_id"]
             t_id = d.get("track_id")
             
-            # Color: Amarillo brillante para foco, Cyan para custom, Blue para base
-            if is_focus:
-                color = (0, 215, 255) # Dorado/Amarillo Focus
-                thick = 3
-            else:
-                color = (255, 255, 0) if cls_id >= 1000 else (233, 165, 14)
-                thick = 2
+            color = (0, 215, 255) if is_focus else ((255, 255, 0) if cls_id >= 1000 else (233, 165, 14))
+            thick = 3 if is_focus else 2
             
+            # Dibujar Trayectoria (Trail)
+            if show_trails and t_id is not None:
+                center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                if t_id not in VisualPainter._track_history:
+                    VisualPainter._track_history[t_id] = []
+                VisualPainter._track_history[t_id].append(center)
+                if len(VisualPainter._track_history[t_id]) > 30:
+                    VisualPainter._track_history[t_id].pop(0)
+                
+                # Dibujar línea de puntos
+                pts = VisualPainter._track_history[t_id]
+                for i in range(1, len(pts)):
+                    alpha = i / len(pts)
+                    c = (int(color[0]*alpha), int(color[1]*alpha), int(color[2]*alpha))
+                    cv2.line(frame, pts[i-1], pts[i], c, 2)
+
             # Dibujar Caja
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
             
-            # Dibujar Etiqueta (Tag)
+            # Dibujar Etiqueta
             id_txt = f" ID:{t_id}" if t_id is not None else ""
             tag = f"{label.upper()}{id_txt} {conf:.2f}"
             if is_focus: tag = f"[ FOCUS ] {tag}"
@@ -248,9 +271,7 @@ class VisualPainter:
             thick_txt = 2 if is_focus else 1
             (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick_txt)
             
-            # Fondo del tag
             cv2.rectangle(frame, (x1, y1 - th - 12), (x1 + tw + 10, y1), color, -1)
-            # Texto del tag (Negro sobre fondo de color)
             cv2.putText(frame, tag, (x1 + 5, y1 - 8), font, f_scale, (0, 0, 0), thick_txt)
             
         return frame

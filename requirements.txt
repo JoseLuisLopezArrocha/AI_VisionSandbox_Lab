@@ -10,3 +10,4 @@ yt-dlp
 requests
 python-dotenv
 openvino>=2024.0.0
+pyttsx3
