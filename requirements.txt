@@ -1,13 +1,21 @@
+# === Dependencias Principales ===
 customtkinter>=5.2.0
 opencv-python>=4.8.0
 Pillow>=10.0.0
-numpy>=1.24.0
-torch>=2.0.0
-vidgear[core]>=0.3.0
 ultralytics>=8.1.0
+vidgear[core]>=0.3.0
+pyttsx3
+python-dotenv
+
+# === Deep Learning y Aceleracion ===
+torch>=2.0.0
+numpy>=1.24.0
+openvino>=2024.0.0
+
+# === Tracking y Optimizacion ===
 lapx
+scipy
+
+# === Streaming y Comunicaciones ===
 yt-dlp
 requests
-python-dotenv
-openvino>=2024.0.0
-pyttsx3

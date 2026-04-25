@@ -26,7 +26,6 @@ class AnnotationWindow(ctk.CTkToplevel):
     """Ventana de anotación: permite dibujar bounding boxes sobre un frame capturado."""
 
     def __init__(self, parent, frame=None, ds_name="", base_name="", dataset_dir="", on_save=None, on_close=None, image_files=None):
-        if hasattr(parent, "add_log"): parent.add_log(f"--- DEBUG ANNOTATOR: Inyectando modo {'múltiple' if image_files else 'simple'} ---")
         super().__init__(parent)
 
         self.ds_name = ds_name
@@ -81,9 +80,13 @@ class AnnotationWindow(ctk.CTkToplevel):
         ctk.CTkButton(self.sidebar, text="Añadir", height=24, font=ctk.CTkFont(size=10), 
                       fg_color="#334155", command=self._add_new_class_from_sidebar).pack(pady=(0, 10), padx=10)
 
-        ctk.CTkLabel(self.sidebar, text="CLASES REGISTRADAS", font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(pady=(5, 0))
         self.class_btn_frame = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent")
         self.class_btn_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Resumen del Dataset (Carga dinámica)
+        ctk.CTkLabel(self.sidebar, text="CONTEO TOTAL DATASET", font=ctk.CTkFont(size=10, weight="bold"), text_color="#38bdf8").pack(pady=(10, 0))
+        self.summary_label = ctk.CTkLabel(self.sidebar, text="Calculando...", font=ctk.CTkFont(size=10), text_color="#94a3b8", justify="left")
+        self.summary_label.pack(fill="x", padx=10, pady=(5, 10))
 
         # Panel Derecho: Canvas
         self.canvas_container = ctk.CTkFrame(self.main_container, fg_color="black")
@@ -92,10 +95,11 @@ class AnnotationWindow(ctk.CTkToplevel):
         self.ann_canvas = tk.Canvas(self.canvas_container, width=self.disp_w, height=self.disp_h, bg="black", highlightthickness=0, cursor="crosshair")
         self.ann_canvas.pack(fill="both", expand=True)
 
-        resized = cv2.resize(frame, (self.disp_w, self.disp_h))
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        self.img_tk = ImageTk.PhotoImage(Image.fromarray(rgb))
-        self.ann_canvas.create_image(0, 0, image=self.img_tk, anchor="nw")
+        if self.frame_bgr is not None:
+            resized = cv2.resize(self.frame_bgr, (self.disp_w, self.disp_h))
+            rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+            self.img_tk = ImageTk.PhotoImage(Image.fromarray(rgb))
+            self.ann_canvas.create_image(0, 0, image=self.img_tk, anchor="nw")
 
         self.ann_canvas.bind("<ButtonPress-1>", self._on_press)
         self.ann_canvas.bind("<B1-Motion>", self._on_drag)
@@ -123,16 +127,24 @@ class AnnotationWindow(ctk.CTkToplevel):
         if not self.image_files:
             ctk.CTkButton(bottom, text="Cancelar", width=80, command=self._cancel, fg_color="#6b7280", hover_color="#4b5563").pack(side="right")
         else:
-            ctk.CTkButton(bottom, text="Finalizar", width=80, command=self.destroy, fg_color="#6b7280", hover_color="#4b5563").pack(side="right")
+            ctk.CTkButton(bottom, text="Finalizar", width=80, command=self._finish, fg_color="#6b7280", hover_color="#4b5563").pack(side="right")
 
         if self.image_files:
             self._load_current_image()
         else:
             self._refresh_class_list()
         
-        # Si no hay clases, poner el foco en la entrada
-        if not self.classes_found:
+        self._update_dataset_summary()
+        
+        # Gestión de foco: Si ya hay clases, poner el foco en la ventana para atajos
+        if self.classes_found:
+            self.focus_set()
+        else:
             self.after(500, lambda: self.new_class_entry.focus_set())
+
+        # Bindings de teclado para atajos rápidos
+        self.bind("<KeyPress>", self._on_key_press)
+        self.new_class_entry.bind("<Escape>", lambda e: self.focus_set())
 
     def _refresh_class_list(self):
         """Actualiza la barra lateral de clases."""
@@ -140,9 +152,12 @@ class AnnotationWindow(ctk.CTkToplevel):
             w.destroy()
         
         self.class_buttons = {}
-        for cls in self.classes_found:
+        for i, cls in enumerate(self.classes_found):
             is_active = (cls == self.active_class_name)
-            btn = ctk.CTkButton(self.class_btn_frame, text=cls, height=28,
+            shortcut = (i + 1) if i < 9 else (0 if i == 9 else None)
+            display_text = f"[{shortcut}] {cls}" if shortcut is not None else cls
+            
+            btn = ctk.CTkButton(self.class_btn_frame, text=display_text, height=28,
                                 fg_color="#38bdf8" if is_active else "#334155",
                                 text_color="#0f172a" if is_active else "#e2e8f0",
                                 hover_color="#0ea5e9",
@@ -155,6 +170,21 @@ class AnnotationWindow(ctk.CTkToplevel):
     def _set_active_class(self, cls_name):
         self.active_class_name = cls_name
         self._refresh_class_list()
+
+    def _on_key_press(self, event):
+        """Maneja atajos de teclado para selección de clase y navegación."""
+        if self.focus_get() == self.new_class_entry:
+            return
+            
+        if event.char.isdigit():
+            val = int(event.char)
+            idx = (val - 1) if val > 0 else 9
+            if idx < len(self.classes_found):
+                self._set_active_class(self.classes_found[idx])
+        elif event.keysym == "Right" or event.char == "d":
+            if self.image_files: self._next_image()
+        elif event.keysym == "Left" or event.char == "a":
+            if self.image_files: self._prev_image()
 
     def _add_new_class_from_sidebar(self):
         val = self.new_class_entry.get().strip()
@@ -170,6 +200,7 @@ class AnnotationWindow(ctk.CTkToplevel):
             
         self.new_class_entry.delete(0, "end")
         self._refresh_class_list()
+        self.focus_set()
         if hasattr(self.master, "add_log"):
             self.master.add_log(f"🏷️ Clases actualizadas: {', '.join(new_classes)}")
 
@@ -219,11 +250,24 @@ class AnnotationWindow(ctk.CTkToplevel):
         return classes
 
     def _on_undo(self, event):
-        if self.boxes:
+        """Elimina una caja específica si se hace clic derecho sobre ella, o la última si no."""
+        if not self.boxes: return
+        found = False
+        for i in range(len(self.boxes) - 1, -1, -1):
+            x1, y1, x2, y2 = self.boxes[i]["bbox"]
+            if (x1 - 2) <= event.x <= (x2 + 2) and (y1 - 2) <= event.y <= (y2 + 2):
+                self.boxes.pop(i)
+                found = True
+                break
+        if not found:
             self.boxes.pop()
-            self._redraw()
+        self._redraw()
 
     def _calculate_scale(self, frame):
+        if frame is None:
+            self.disp_w, self.disp_h = 800, 600
+            self.scale = 1.0
+            return
         h, w = frame.shape[:2]
         max_w, max_h = 1000, 700
         self.scale = min(max_w / w, max_h / h, 1.0)
@@ -234,9 +278,12 @@ class AnnotationWindow(ctk.CTkToplevel):
         """Carga el frame y metadatos de una imagen de la lista."""
         path = self.image_files[index]
         self.frame_bgr = cv2.imread(path)
+        if self.frame_bgr is None:
+            return False
         self.base_name = os.path.splitext(os.path.basename(path))[0]
         self._calculate_scale(self.frame_bgr)
         self.title(f"Anotar: {self.base_name} ({index+1}/{len(self.image_files)})")
+        return True
 
     def _load_current_image(self):
         """Actualiza el canvas con la imagen actual y carga sus etiquetas si existen."""
@@ -311,8 +358,19 @@ class AnnotationWindow(ctk.CTkToplevel):
         if not self.image_files:
             self.destroy()
 
-    def _save(self): # Mantener compatibilidad si se llama desde fuera
+    def _save(self):
         self._save_internal()
+        self.destroy()
+
+    def _finish(self):
+        """Guarda la imagen actual y cierra abriendo la carpeta de resultados."""
+        self._save_internal()
+        try:
+            target_path = os.path.abspath(self.dataset_dir)
+            if os.path.exists(target_path):
+                os.startfile(target_path)
+        except Exception:
+            pass
         self.destroy()
 
     def _save_internal(self):
@@ -354,10 +412,33 @@ class AnnotationWindow(ctk.CTkToplevel):
             
             if self.on_save_callback:
                 self.on_save_callback(self.base_name, len(self.boxes))
+            self._update_dataset_summary()
                 
         except Exception as e:
             print(f"Error guardando: {e}")
             messagebox.showerror("Error", f"Fallo al guardar {self.base_name}: {e}")
+
+    def _update_dataset_summary(self):
+        """Calcula el total de etiquetas por clase en todo el dataset."""
+        from collections import Counter
+        counts = Counter()
+        label_dir = os.path.join(self.dataset_dir, "labels", "train")
+        if os.path.exists(label_dir):
+            for file in os.listdir(label_dir):
+                if file.endswith(".txt"):
+                    try:
+                        with open(os.path.join(label_dir, file), "r") as f:
+                            for line in f:
+                                parts = line.strip().split()
+                                if parts:
+                                    try: counts[int(parts[0])] += 1
+                                    except: pass
+                    except: pass
+        summary_lines = []
+        for i, cls in enumerate(self.classes_found):
+            summary_lines.append(f"\u2022 {cls.upper()}: {counts[i]}")
+        txt = "\n".join(summary_lines) if summary_lines else "Sin etiquetas todav\u00eda"
+        self.summary_label.configure(text=txt)
 
     def _update_yaml(self):
         """Actualiza el archivo data.yaml con la lista completa de clases."""
@@ -609,7 +690,6 @@ class ClassFilterWindow(ctk.CTkToplevel):
                 self.selected_ids.add(cls_id)
             else:
                 self.selected_ids.discard(cls_id)
-
         # Si están todas seleccionadas, devolvemos None (es más eficiente)
         if len(self.selected_ids) == len(self.all_classes):
             final_targets = None
@@ -620,24 +700,24 @@ class ClassFilterWindow(ctk.CTkToplevel):
         self.destroy()
 
 class InfoWindow(ctk.CTkToplevel):
-    """Ventana interactiva de créditos, librerías y dependencias."""
+    """Ventana interactiva de creditos, librerias y dependencias."""
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("Información del Proyecto")
-        win_w, win_h = 480, 600
+        self.title("Informacion del Proyecto")
+        win_w, win_h = 500, 680
         x = (self.winfo_screenwidth() // 2) - (win_w // 2)
         y = (self.winfo_screenheight() // 2) - (win_h // 2)
         self.geometry(f"{win_w}x{win_h}+{x}+{y}")
         self.resizable(False, False)
         self.grab_set()
 
-        ctk.CTkLabel(self, text="ℹ️ ACERCA DE VISIÓN AI", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(20, 5))
+        ctk.CTkLabel(self, text="AI VISIONSANDBOX LAB", font=ctk.CTkFont(size=18, weight="bold"), text_color="#38bdf8").pack(pady=(20, 2))
+        ctk.CTkLabel(self, text="v4.0 - Motor de Vision Artificial en Tiempo Real", font=ctk.CTkFont(size=11), text_color="#94a3b8").pack(pady=(0, 2))
         py_ver = platform.python_version()
-        ctk.CTkLabel(self, text=f"Desarrollado en Python {py_ver}", text_color="#aaa").pack(pady=(0, 20))
+        ctk.CTkLabel(self, text=f"Python {py_ver} | {platform.system()} {platform.machine()}", text_color="#666", font=ctk.CTkFont(size=10)).pack(pady=(0, 15))
 
-        # Librerías Directas
-        self._section("Librerías Directas y Apoyo")
+        self._section("Librerias Principales")
 
         def lnk(text, url, pkg):
             try:
@@ -645,51 +725,68 @@ class InfoWindow(ctk.CTkToplevel):
             except Exception:
                 v = "N/A"
             btn_text = f"{text} (v{v})"
-            btn = ctk.CTkButton(self, text=btn_text, fg_color="transparent", text_color="#38bdf8", hover_color="#1e293b", anchor="w", command=lambda url=url: webbrowser.open(url))
-            btn.pack(fill="x", padx=40, pady=2)
+            btn = ctk.CTkButton(self, text=btn_text, fg_color="transparent", text_color="#38bdf8", hover_color="#1e293b", anchor="w", command=lambda u=url: webbrowser.open(u))
+            btn.pack(fill="x", padx=40, pady=1)
 
-        lnk("🖼️ customtkinter", "https://customtkinter.tomschimansky.com/", "customtkinter")
-        lnk("👁️ opencv-python", "https://opencv.org/", "opencv-python")
-        lnk("🖌️ Pillow", "https://python-pillow.org/", "Pillow")
-        lnk("🧠 ultralytics", "https://ultralytics.com/", "ultralytics")
-        lnk("🎥 vidgear", "https://abhitronix.github.io/vidgear/", "vidgear")
+        lnk("ultralytics", "https://ultralytics.com/", "ultralytics")
+        lnk("customtkinter", "https://customtkinter.tomschimansky.com/", "customtkinter")
+        lnk("opencv-python", "https://opencv.org/", "opencv-python")
+        lnk("vidgear", "https://abhitronix.github.io/vidgear/", "vidgear")
+        lnk("Pillow", "https://python-pillow.org/", "Pillow")
+        lnk("pyttsx3", "https://pypi.org/project/pyttsx3/", "pyttsx3")
+        lnk("python-dotenv", "https://pypi.org/project/python-dotenv/", "python-dotenv")
 
-        # Librerías Transitivas
-        self._section("Librerías Transitivas (Sub-dependencias)")
+        self._section("Librerias de Soporte")
         
         self.dep_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.dep_frame.pack(fill="x", padx=30, pady=5)
         
-        self.show_dep_btn = ctk.CTkButton(self.dep_frame, text="Ver Sub-librerías", command=self._toggle_deps, fg_color="#334155")
-        self.show_dep_btn.pack(pady=10)
+        self.show_dep_btn = ctk.CTkButton(self.dep_frame, text="Ver Sub-librerias", command=self._toggle_deps, fg_color="#334155")
+        self.show_dep_btn.pack(pady=5)
 
-        self.dep_textbox = ctk.CTkTextbox(self.dep_frame, height=120, fg_color="#1a1c1e")
+        self.dep_textbox = ctk.CTkTextbox(self.dep_frame, height=150, fg_color="#1a1c1e")
         def get_v(pkg):
             try: return importlib.metadata.version(pkg)
             except Exception: return "N/A"
 
         deps = [
-            f"• torch & torchvision (v{get_v('torch')})",
-            f"• numpy (v{get_v('numpy')})",
-            f"• yt-dlp (v{get_v('yt-dlp')})",
-            f"• scipy (v{get_v('scipy')})",
-            f"• requests (v{get_v('requests')})"
+            f"PyTorch (v{get_v('torch')})",
+            f"NumPy (v{get_v('numpy')})",
+            f"yt-dlp (v{get_v('yt-dlp')})",
+            f"requests (v{get_v('requests')})",
+            f"LapX - Tracking ByteTrack (v{get_v('lapx')})",
+            f"OpenVINO - Aceleracion Intel (v{get_v('openvino')})",
+            f"scipy (v{get_v('scipy')})",
+            f"SQLite3 (incluido en Python)",
         ]
         self.dep_textbox.insert("0.0", "\n".join(deps))
         self.dep_textbox.configure(state="disabled")
 
-        ctk.CTkButton(self, text="Cerrar", command=self.destroy, fg_color="#6b7280", hover_color="#4b5563").pack(pady=(20, 20))
+        self._section("Funcionalidades Clave")
+        features = (
+            "Deteccion YOLO/RT-DETR + Zero-Shot (YOLO-World)\n"
+            "Tracking de objetos con ByteTrack + Focus Mode\n"
+            "Zonas poligonales con motor de hitos y alertas\n"
+            "Telegram, Webhooks, TTS y evidencias automaticas\n"
+            "Dashboard interactivo con graficas por zonas\n"
+            "Anotador visual con atajos de teclado\n"
+            "Autocaptura, importacion ZIP y exportacion de datasets\n"
+            "Aceleracion GPU: CUDA / OpenVINO / DirectML"
+        )
+        ctk.CTkLabel(self, text=features, font=ctk.CTkFont(size=10), text_color="#94a3b8", justify="left").pack(padx=40, anchor="w")
+
+        ctk.CTkButton(self, text="Cerrar", command=self.destroy, fg_color="#6b7280", hover_color="#4b5563").pack(pady=(15, 20))
 
     def _section(self, title):
-        ctk.CTkLabel(self, text=title, font=ctk.CTkFont(weight="bold", size=13)).pack(padx=30, pady=(15, 5), anchor="w")
+        ctk.CTkLabel(self, text=title, font=ctk.CTkFont(weight="bold", size=13)).pack(padx=30, pady=(12, 3), anchor="w")
 
     def _toggle_deps(self):
         if self.dep_textbox.winfo_ismapped():
             self.dep_textbox.pack_forget()
-            self.show_dep_btn.configure(text="Ver Sub-librerías")
+            self.show_dep_btn.configure(text="Ver Sub-librerias")
         else:
             self.dep_textbox.pack(fill="x", pady=5)
-            self.show_dep_btn.configure(text="Ocultar Sub-librerías")
+            self.show_dep_btn.configure(text="Ocultar Sub-librerias")
 
 class CaptureNamePopup(ctk.CTkToplevel):
     """Ventana modal simple para pedir el nombre de la clase antes de capturar."""

@@ -156,8 +156,8 @@ class VisionApp(ctk.CTk):
 
         # Cabecera
         header_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        header_frame.pack(pady=(20, 15), padx=20, fill="x")
-        ctk.CTkLabel(header_frame, text="VISIONSANDBOX LAB", font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
+        header_frame.pack(pady=(12, 8), padx=20, fill="x")
+        ctk.CTkLabel(header_frame, text="VISIONSANDBOX LAB", font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
         
         # Botón Info estilizado como píldora elegante
         self.info_btn = ctk.CTkButton(header_frame, text="\uE946", width=28, height=28, corner_radius=14, 
@@ -177,7 +177,7 @@ class VisionApp(ctk.CTk):
         self._section("FUENTE DE VÍDEO")
         
         src_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        src_row.pack(fill="x", padx=20, pady=(0, 10))
+        src_row.pack(fill="x", padx=20, pady=(0, 6))
         
         self.source_btn = ctk.CTkButton(src_row, text="🌐 Seleccionar Fuente...", height=35, 
                                         fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
@@ -194,24 +194,24 @@ class VisionApp(ctk.CTk):
         self.stream_quality_var = ctk.StringVar(value="720p")
         self.stream_quality = ctk.CTkOptionMenu(self.sidebar, values=["360p", "480p", "720p", "1080p"], 
                                                 variable=self.stream_quality_var, height=28, command=lambda _: self.change_stream())
-        self.stream_quality.pack(pady=(0, 10), padx=20, fill="x")
+        self.stream_quality.pack(pady=(0, 6), padx=20, fill="x")
         
         # MODELO
         self._section("MODELO")
         
         # Fila 1: Botón Maestro de Desactivación
         self.no_model_selector = ctk.CTkSegmentedButton(self.sidebar, values=["🚫 DESACTIVAR PROCESAMIENTO IA"], 
-                                                       command=lambda _: self._on_no_model_click(), height=32)
-        self.no_model_selector.pack(pady=(0, 10), padx=20, fill="x")
+                                                       command=lambda _: self._on_no_model_click(), height=30)
+        self.no_model_selector.pack(pady=(0, 6), padx=20, fill="x")
         
         # Fila 2: Familias
         families = list(self.detector.architectures.keys())
-        self.model_selector = ctk.CTkSegmentedButton(self.sidebar, values=families, command=self._on_family_change, height=28)
-        self.model_selector.pack(pady=(0, 5), padx=20, fill="x")
+        self.model_selector = ctk.CTkSegmentedButton(self.sidebar, values=families, command=self._on_family_change, height=26)
+        self.model_selector.pack(pady=(0, 4), padx=20, fill="x")
         
         # Fila 3: Escalas
-        self.scale_selector = ctk.CTkSegmentedButton(self.sidebar, command=self._on_config_change, height=28)
-        self.scale_selector.pack(pady=(0, 10), padx=20, fill="x")
+        self.scale_selector = ctk.CTkSegmentedButton(self.sidebar, command=self._on_config_change, height=26)
+        self.scale_selector.pack(pady=(0, 6), padx=20, fill="x")
         # BLOQUE DINÁMICO: PROMPT UNIVERSAL (Solo para YOLO-World)
         self.world_prompt_frame = ctk.CTkFrame(self.sidebar, fg_color="#1e293b", border_width=1, border_color="#38bdf8")
         
@@ -232,15 +232,15 @@ class VisionApp(ctk.CTk):
         self._section("ANÁLISIS")
         self.conf_slider = ctk.CTkSlider(self.sidebar, from_=0.01, to=0.99, number_of_steps=98, command=self._on_conf_change)
         self.conf_slider.set(0.35)
-        self.conf_slider.pack(pady=(0, 5), padx=20, fill="x")
+        self.conf_slider.pack(pady=(0, 2), padx=20, fill="x")
         self.conf_label = ctk.CTkLabel(self.sidebar, text="Confianza: 35%", font=ctk.CTkFont(size=11))
-        self.conf_label.pack(pady=(0, 5), padx=20, anchor="w")
+        self.conf_label.pack(pady=(0, 2), padx=20, anchor="w")
 
         self.interval_slider = ctk.CTkSlider(self.sidebar, from_=0.0, to=5.0, number_of_steps=50, command=self._on_interval_change)
         self.interval_slider.set(self.infer_interval)
-        self.interval_slider.pack(pady=(5, 5), padx=20, fill="x")
+        self.interval_slider.pack(pady=(2, 2), padx=20, fill="x")
         self.interval_label = ctk.CTkLabel(self.sidebar, text=f"Muestreo: {self.infer_interval:.1f}s", font=ctk.CTkFont(size=11))
-        self.interval_label.pack(pady=(0, 5), padx=20, anchor="w")
+        self.interval_label.pack(pady=(0, 4), padx=20, anchor="w")
 
         f_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         f_row.pack(fill="x", padx=20, pady=5)
@@ -249,11 +249,11 @@ class VisionApp(ctk.CTk):
         ctk.CTkButton(f_row, text="Filtro", command=self.open_class_filter, height=24).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
         ctk.CTkButton(self.sidebar, text="🔔 Eventos e Hitos", command=self.open_events_config, 
-                      fg_color="#ea580c", hover_color="#c2410c", height=28).pack(pady=(5, 5), padx=20, fill="x")
+                      fg_color="#ea580c", hover_color="#c2410c", height=28).pack(pady=(2, 4), padx=20, fill="x")
 
         # CAPTURA DATASET (Compacto: entrada + botones en una sola fila)
         cap_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        cap_row.pack(fill="x", padx=20, pady=(0, 5))
+        cap_row.pack(fill="x", padx=20, pady=(0, 4))
         
         self.capture_entry = ctk.CTkEntry(cap_row, placeholder_text="Dataset: Acuario, Trafico...", height=26)
         self.capture_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
@@ -271,7 +271,7 @@ class VisionApp(ctk.CTk):
         # AUTOCAPTURA
         self._section("AUTOCAPTURA")
         auto_cap_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        auto_cap_row.pack(fill="x", padx=20, pady=(0, 5))
+        auto_cap_row.pack(fill="x", padx=20, pady=(0, 4))
         
         self.auto_capture_interval = ctk.CTkEntry(auto_cap_row, placeholder_text="Seg (Ej: 5)", height=26, width=60)
         self.auto_capture_interval.pack(side="left", padx=(0, 5))
@@ -284,14 +284,14 @@ class VisionApp(ctk.CTk):
         # ZONAS
         self._section("ZONAS")
         z_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        z_btns.pack(pady=(0, 5), padx=20, fill="x")
+        z_btns.pack(pady=(0, 4), padx=20, fill="x")
         self.draw_btn = ctk.CTkButton(z_btns, text="Pintar", command=self.toggle_zone_drawing, width=100, height=28)
         self.draw_btn.pack(side="left", padx=(0, 5))
         ctk.CTkButton(z_btns, text="Borrar", command=self.clear_zones, fg_color="#dc2626", height=28).pack(side="left", fill="x", expand=True)
 
         # --- BLOQUE INFERIOR FIJO (Tema + Hardware) ---
         bottom = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        bottom.pack(side="bottom", fill="x", padx=20, pady=(5, 10))
+        bottom.pack(side="bottom", fill="x", padx=20, pady=(2, 6))
         
         # Hardware
         self.hw_label = ctk.CTkLabel(bottom, 
@@ -315,7 +315,7 @@ class VisionApp(ctk.CTk):
         self.antigravity_btn.bind("<Button-1>", lambda e: webbrowser.open("https://antigravity.google"))
 
     def _section(self, text):
-        ctk.CTkLabel(self.sidebar, text=text, font=ctk.CTkFont(size=11, weight="bold"), text_color="#666").pack(pady=(12, 5), padx=20, anchor="w")
+        ctk.CTkLabel(self.sidebar, text=text, font=ctk.CTkFont(size=11, weight="bold"), text_color="#666").pack(pady=(8, 3), padx=20, anchor="w")
 
     def _build_bottom_dashboard(self):
         """Dashboard horizontal para analítica y logs."""
@@ -971,14 +971,13 @@ class VisionApp(ctk.CTk):
     def take_capture(self):
         """Captura instantánea: pausa, congela el frame actual, y abre el anotador multi-clase."""
         try:
-            self.add_log("--- DEBUG CAPTURA 1: Inicio ---")
             if self.raw_frame is None:
                 self.add_log("⚠️ Error: No hay señal de vídeo para capturar.")
                 return
 
             ds_name = self.capture_entry.get().strip()
             if not ds_name:
-                ds_name = f"dataset_{time.strftime('%d-%m-%Y')}"
+                ds_name = f"dataset_{time.strftime('%d%m%Y_%H%M%S')}"
             ds_name = ds_name.lower().replace(" ", "_")
             
             # Asegurar que DATASETS_DIR existe
@@ -990,7 +989,6 @@ class VisionApp(ctk.CTk):
 
             # 1. Dialogo
             if ds_name not in self._checked_datasets and os.path.exists(dataset_dir):
-                self.add_log("❓ Esperando respuesta del usuario (Dialogo)...")
                 resp = messagebox.askyesnocancel("Dataset Existente", 
                     f"El dataset '{ds_name}' ya existe.\n\n¿Borrar y empezar de nuevo?", parent=self)
                 if resp is None: 
@@ -1002,47 +1000,40 @@ class VisionApp(ctk.CTk):
             
             self._checked_datasets.add(ds_name)
 
-            self.add_log("--- DEBUG CAPTURA 2: Frame Copy ---")
             captured_frame = self.raw_frame.copy()
-            self.add_log(f"✅ Frame copiado: {captured_frame.shape}")
             
             self._was_paused_before_capture = self.is_paused
             if not self.is_paused:
-                self.add_log("⏸️ Intentando pausar...")
                 self.toggle_pause()
-                self.add_log("✅ Pausado.")
 
-            self.add_log("--- DEBUG CAPTURA 3: Estructura ---")
             actual_dir = ensure_dataset_structure(ds_name)
-            self.add_log(f"✅ Dir: {actual_dir}")
             base_name = get_next_capture_filename(ds_name, actual_dir)
-            self.add_log(f"✅ File: {base_name}")
             
-            self.add_log("--- DEBUG CAPTURA 4: Abriendo Ventana ---")
             AnnotationWindow(self, captured_frame, ds_name, base_name, actual_dir, 
                            self._on_capture_saved, self._on_capture_cancelled)
-            self.add_log("✅ Ventana instanciada.")
         except Exception as e:
             self.add_log(f"❌ FALLO GLOBAL CAPTURA: {e}")
             import traceback
-            print(traceback.format_exc()) # Enviar a consola real para debug profundo
-            if not self._was_paused_before_capture:
+            print(traceback.format_exc())
+            was_paused = getattr(self, '_was_paused_before_capture', True)
+            if not was_paused and self.is_paused:
                 self.toggle_pause()
 
     def _on_capture_cancelled(self):
         """Callback si el usuario cancela la anotación."""
-        if not self._was_paused_before_capture and self.is_paused:
+        was_paused = getattr(self, '_was_paused_before_capture', True)
+        if not was_paused and self.is_paused:
             self.toggle_pause()
 
     def _on_capture_saved(self, name, boxes_count):
         """Callback cuando el usuario guarda la anotación."""
         self.add_log(f"✅ Captura guardada: {name} ({boxes_count} bboxes).")
-        # Reanudar si estaba reproduciéndose antes
-        if not self._was_paused_before_capture and self.is_paused:
+        was_paused = getattr(self, '_was_paused_before_capture', True)
+        if not was_paused and self.is_paused:
             self.toggle_pause()
 
     def export_dataset_zip(self):
-        """Exporta todos los datasets en un archivo ZIP listo para entrenar."""
+        """Exporta solo las imágenes etiquetadas y su metadata en un archivo ZIP."""
         import zipfile
         from ..utils.helpers import DATASETS_DIR
         
@@ -1053,20 +1044,56 @@ class VisionApp(ctk.CTk):
         dest = tk.filedialog.asksaveasfilename(
             defaultextension=".zip",
             filetypes=[("Archivo ZIP", "*.zip")],
-            initialfile="dataset_export.zip"
+            initialfile="dataset_export_selective.zip"
         )
         if not dest:
             return
         
         try:
+            total_files = 0
             with zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for root, dirs, files in os.walk(DATASETS_DIR):
-                    for file in files:
-                        full_path = os.path.join(root, file)
-                        arcname = os.path.relpath(full_path, DATASETS_DIR)
-                        zf.write(full_path, arcname)
-            
-            self.add_log(f"📦 Dataset exportado: {os.path.basename(dest)}")
+                # Iterar por cada dataset (carpeta de primer nivel en DATASETS_DIR)
+                for ds_name in os.listdir(DATASETS_DIR):
+                    ds_path = os.path.join(DATASETS_DIR, ds_name)
+                    if not os.path.isdir(ds_path): continue
+
+                    # 1. Archivos maestros del dataset
+                    for master in ["data.yaml", "classes.txt"]:
+                        m_path = os.path.join(ds_path, master)
+                        if os.path.exists(m_path):
+                            zf.write(m_path, os.path.join(ds_name, master))
+                            total_files += 1
+
+                    # 2. Etiquetas e Imágenes sincronizadas
+                    labels_dir = os.path.join(ds_path, "labels", "train")
+                    images_dir = os.path.join(ds_path, "images", "train")
+                    
+                    if os.path.exists(labels_dir):
+                        for lab_file in os.listdir(labels_dir):
+                            if lab_file.endswith(".txt"):
+                                base = os.path.splitext(lab_file)[0]
+                                lab_full = os.path.join(labels_dir, lab_file)
+                                
+                                # Buscar imagen correspondiente
+                                img_found = None
+                                for ext in [".jpg", ".jpeg", ".png", ".bmp"]:
+                                    test_img = os.path.join(images_dir, base + ext)
+                                    if os.path.exists(test_img):
+                                        img_found = test_img
+                                        break
+                                
+                                if img_found:
+                                    # Añadir etiqueta
+                                    zf.write(lab_full, os.path.join(ds_name, "labels", "train", lab_file))
+                                    # Añadir imagen
+                                    zf.write(img_found, os.path.join(ds_name, "images", "train", os.path.basename(img_found)))
+                                    total_files += 2
+
+            if total_files > 0:
+                self.add_log(f"📦 Exportación selectiva completa: {total_files} archivos en '{os.path.basename(dest)}'.")
+            else:
+                self.add_log("⚠️ No se encontraron imágenes con etiquetas para exportar.")
+                if os.path.exists(dest): os.remove(dest)
         except Exception as e:
             self.add_log(f"Error exportando dataset: {e}")
 
