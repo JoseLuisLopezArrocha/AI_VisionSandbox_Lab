@@ -1,11 +1,14 @@
 import customtkinter as ctk
 import tkinter as tk
+from tkinter import messagebox
 import cv2
 import numpy as np
 import os
 import threading
 import time
 import webbrowser
+import platform
+import shutil
 from PIL import Image, ImageTk
 from collections import Counter
 
@@ -13,13 +16,13 @@ from collections import Counter
 from ..core.engine import VisionEngine
 from ..core.detector import ObjectDetector
 from ..utils.helpers import (
-    ZONE_COLORS, 
+    ZONE_COLORS, DATASETS_DIR,
     ensure_dataset_structure, get_next_capture_filename,
     save_app_config, load_app_config
 )
 from .components import (
     AnnotationWindow, AddModelPopup, ClassFilterWindow, InfoWindow,
-    ModelExplorerWindow
+    ModelExplorerWindow, SourceSelectorWindow, FavoritesWindow
 )
 from ..utils.painter import VisualPainter
 from ..core.events import EventEngine
@@ -53,21 +56,11 @@ class _SplashScreen(ctk.CTkFrame):
         self.update()
 
 class VisionApp(ctk.CTk):
-    """
-    Aplicación Principal: Dashboard de Control de Visión Artificial.
-    
-    Gestiona el ciclo de vida de la aplicación, el hilo de procesamiento de vídeo,
-    la persistencia de configuraciones y la orquestación entre el motor de captura,
-    el detector y la capa visual.
-    
-    Arquitectura:
-    - Threading: El procesamiento de vídeo ocurre en un hilo separado para mantener la UI fluida.
-    - Persistencia: Carga configuraciones automáticas basadas en la URL del stream.
-    - Dashboard: Integra telemetría en tiempo real y gráficos dinámicos.
-    """
+    """Aplicación Principal: Dashboard de Control de Visión Artificial."""
 
     def __init__(self):
         super().__init__()
+        self.NONE_MODEL = "🚫 Sin Modelo"
         
         self.title("AI VisionSandbox Lab | Dashboard de Inteligencia")
         self.minsize(960, 640)
@@ -103,6 +96,15 @@ class VisionApp(ctk.CTk):
         self.url = "https://www.youtube.com/watch?v=dfVK7ld38Ys"
         self.locked_track_id = None
         self.focus_lost_cnt = 0
+        self._checked_datasets = set() # Rastreo de datasets validados en esta sesión
+        self.is_auto_capturing = False # Estado de autocaptura periódica
+        
+        # Telemetría de Sesión
+        self.total_detections_ever = 0
+        self.session_start_time = time.time()
+        self.session_seen_ids = set() # IDs únicos vistos en esta sesión
+        self.session_class_counts = Counter() # Conteo por clase de IDs únicos
+        self.bar_chart_mode = "General" # Modo de la gráfica: General, Z1, Z2...
 
         # 3. MOTORES
         self.data_logger = DataLogger()
@@ -141,25 +143,11 @@ class VisionApp(ctk.CTk):
             self.update_video()
 
     def _load_lightest_model(self):
-        """Busca y carga la arquitectura/alias más ligera disponible."""
+        """Inicializa el selector en 'Sin Modelo' para un arranque instantáneo."""
         try:
-            if not self.detector.architectures:
-                return
-
-            # Prioridad: Buscar YOLO11 o YOLO11N, si no el primero que haya
-            families = sorted(self.detector.architectures.keys())
-            target_family = families[0]
-            for f in families:
-                if "yolo11" in f.lower():
-                    target_family = f
-                    break
-            
-            aliases = self.detector.architectures[target_family]["aliases"]
-            target_alias = sorted(aliases.keys())[0] # El 01 suele ser el más ligero
-            
-            threading.Thread(target=self.change_model, args=(target_family, target_alias), daemon=True).start()
+            self._on_no_model_click()
         except Exception as e:
-            print(f"[Main] Error seleccionando modelo ligero: {e}")
+            print(f"[Main] Error en inicialización de modelo: {e}")
 
     def _build_sidebar(self):
         """Construye el panel lateral compacto y sin scroll."""
@@ -172,44 +160,36 @@ class VisionApp(ctk.CTk):
         ctk.CTkLabel(header_frame, text="VISIONSANDBOX LAB", font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
         
         # Botón Info estilizado como píldora elegante
-        self.info_btn = ctk.CTkButton(header_frame, text="ℹ", width=28, height=28, corner_radius=14, 
+        self.info_btn = ctk.CTkButton(header_frame, text="\uE946", width=28, height=28, corner_radius=14, 
                                       fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
-                                      font=ctk.CTkFont(size=14, weight="bold"),
+                                      font=ctk.CTkFont(family="Segoe MDL2 Assets", size=14, weight="bold"),
                                       command=lambda: InfoWindow(self))
         self.info_btn.pack(side="right", padx=2)
         
         # Botón Settings (Tuerca)
-        self.settings_btn = ctk.CTkButton(header_frame, text="⚙️", width=28, height=28, corner_radius=14, 
+        self.settings_btn = ctk.CTkButton(header_frame, text="\uE713", width=28, height=28, corner_radius=14, 
                                           fg_color="#1e293b", hover_color="#334155", text_color="#94a3b8",
-                                          font=ctk.CTkFont(size=14),
+                                          font=ctk.CTkFont(family="Segoe MDL2 Assets", size=14),
                                           command=self.open_settings)
         self.settings_btn.pack(side="right", padx=2)
 
         # FUENTE
         self._section("FUENTE DE VÍDEO")
         
-        url_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        url_row.pack(pady=(0, 5), padx=20, fill="x")
+        src_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        src_row.pack(fill="x", padx=20, pady=(0, 10))
         
-        self.url_entry = ctk.CTkEntry(url_row, placeholder_text="URL o Ruta", height=28)
-        self.url_entry.insert(0, self.url)
-        self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        # UX: Seleccionar todo al hacer clic en lugar de borrar
-        def _select_all(_):
-            self.url_entry.focus_set()
-            self.url_entry.after(10, lambda: self.url_entry.select_range(0, 'end'))
-        
-        self.url_entry.bind("<Button-1>", _select_all)
-        self.url_entry.bind("<Return>", lambda _: self.change_stream())
+        self.source_btn = ctk.CTkButton(src_row, text="🌐 Seleccionar Fuente...", height=35, 
+                                        fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
+                                        font=ctk.CTkFont(size=13, weight="bold"),
+                                        command=self.open_source_selector)
+        self.source_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
-        ctk.CTkButton(url_row, text="⚡", width=28, height=28, command=self.change_stream, 
-                      fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
-                      font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=2)
-        
-        ctk.CTkButton(url_row, text="📁", width=28, height=28, command=self.browse_file,
-                      fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
-                      font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=2)
+        self.fav_btn = ctk.CTkButton(src_row, text="\uE735", width=35, height=35, 
+                                     fg_color="#1e293b", hover_color="#334155", text_color="#facc15",
+                                     font=ctk.CTkFont(family="Segoe MDL2 Assets", size=16),
+                                     command=lambda: FavoritesWindow(self, self.change_stream))
+        self.fav_btn.pack(side="right")
         
         self.stream_quality_var = ctk.StringVar(value="720p")
         self.stream_quality = ctk.CTkOptionMenu(self.sidebar, values=["360p", "480p", "720p", "1080p"], 
@@ -218,15 +198,22 @@ class VisionApp(ctk.CTk):
         
         # MODELO
         self._section("MODELO")
+        
+        # Fila 1: Botón Maestro de Desactivación
+        self.no_model_selector = ctk.CTkSegmentedButton(self.sidebar, values=["🚫 DESACTIVAR PROCESAMIENTO IA"], 
+                                                       command=lambda _: self._on_no_model_click(), height=32)
+        self.no_model_selector.pack(pady=(0, 10), padx=20, fill="x")
+        
+        # Fila 2: Familias
         families = list(self.detector.architectures.keys())
         self.model_selector = ctk.CTkSegmentedButton(self.sidebar, values=families, command=self._on_family_change, height=28)
         self.model_selector.pack(pady=(0, 5), padx=20, fill="x")
         
+        # Fila 3: Escalas
         self.scale_selector = ctk.CTkSegmentedButton(self.sidebar, command=self._on_config_change, height=28)
         self.scale_selector.pack(pady=(0, 10), padx=20, fill="x")
         # BLOQUE DINÁMICO: PROMPT UNIVERSAL (Solo para YOLO-World)
         self.world_prompt_frame = ctk.CTkFrame(self.sidebar, fg_color="#1e293b", border_width=1, border_color="#38bdf8")
-        # No se empaqueta inicialmente (se oculta)
         
         ctk.CTkLabel(self.world_prompt_frame, text="🔍 BÚSQUEDA UNIVERSAL AI", 
                      font=ctk.CTkFont(size=11, weight="bold"), text_color="#38bdf8").pack(pady=(5, 2))
@@ -240,10 +227,6 @@ class VisionApp(ctk.CTk):
                                   font=ctk.CTkFont(size=11, weight="bold"),
                                   command=self.apply_world_prompt)
         btn_apply.pack(pady=(0, 10), padx=10, fill="x")
-
-        if families:
-            self.model_selector.set(families[0])
-            self._on_family_change(families[0])
 
         # ANÁLISIS (Compacto)
         self._section("ANÁLISIS")
@@ -272,15 +255,31 @@ class VisionApp(ctk.CTk):
         cap_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         cap_row.pack(fill="x", padx=20, pady=(0, 5))
         
-        self.capture_entry = ctk.CTkEntry(cap_row, placeholder_text="Clase: taxi, bache...", height=26)
+        self.capture_entry = ctk.CTkEntry(cap_row, placeholder_text="Dataset: Acuario, Trafico...", height=26)
         self.capture_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.capture_entry.bind("<Return>", lambda _: self.take_capture())
         
         ctk.CTkButton(cap_row, text="📸", command=self.take_capture,
                       fg_color="#16a34a", hover_color="#15803d", height=26, width=32).pack(side="left", padx=(0, 2))
         
+        ctk.CTkButton(cap_row, text="📂", command=self.import_zip_dataset,
+                      fg_color="#f59e0b", hover_color="#d97706", height=26, width=32).pack(side="left", padx=(0, 2))
+        
         ctk.CTkButton(cap_row, text="📦", command=self.export_dataset_zip,
                       fg_color="#6366f1", hover_color="#4f46e5", height=26, width=32).pack(side="left")
+
+        # AUTOCAPTURA
+        self._section("AUTOCAPTURA")
+        auto_cap_row = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        auto_cap_row.pack(fill="x", padx=20, pady=(0, 5))
+        
+        self.auto_capture_interval = ctk.CTkEntry(auto_cap_row, placeholder_text="Seg (Ej: 5)", height=26, width=60)
+        self.auto_capture_interval.pack(side="left", padx=(0, 5))
+        self.auto_capture_interval.insert(0, "5")
+        
+        self.auto_capture_btn = ctk.CTkButton(auto_cap_row, text="▶ Auto", command=self.toggle_auto_capture,
+                                             fg_color="#10b981", hover_color="#059669", height=26)
+        self.auto_capture_btn.pack(side="left", fill="x", expand=True)
 
         # ZONAS
         self._section("ZONAS")
@@ -352,12 +351,39 @@ class VisionApp(ctk.CTk):
         self.evidence_items = []
 
         # 2. Gráfico Distribución (Columna 1)
-        self.bar_canvas = tk.Canvas(self.dash, height=140, bg="#111", highlightthickness=0)
-        self.bar_canvas.grid(row=0, column=1, padx=10, pady=15, sticky="nsew")
+        self.bar_frame = ctk.CTkFrame(self.dash, fg_color="transparent")
+        self.bar_frame.grid(row=0, column=1, padx=10, pady=15, sticky="nsew")
+        
+        # Selector de Modo de Gráfica
+        self.bar_modes_frame = ctk.CTkFrame(self.bar_frame, fg_color="transparent", height=25)
+        self.bar_modes_frame.pack(fill="x", pady=(0, 5))
+        self._update_bar_mode_buttons()
 
-        # 3. Gráfico Evolución
-        self.line_canvas = tk.Canvas(self.dash, height=140, bg="#111", highlightthickness=0)
-        self.line_canvas.grid(row=0, column=2, padx=10, pady=15, sticky="nsew")
+        self.bar_canvas = tk.Canvas(self.bar_frame, height=120, bg="#111", highlightthickness=0)
+        self.bar_canvas.pack(fill="both", expand=True)
+
+        # 3. Telemetría de Sesión (Columna 2)
+        self.telemetry_frame = ctk.CTkFrame(self.dash, height=140, fg_color="#111")
+        self.telemetry_frame.grid(row=0, column=2, padx=10, pady=15, sticky="nsew")
+        
+        ctk.CTkLabel(self.telemetry_frame, text="RESUMEN DE SESIÓN", 
+                     font=ctk.CTkFont(size=9, weight="bold"), text_color="#444").pack(pady=(10, 5))
+        
+        self.total_ever_label = ctk.CTkLabel(self.telemetry_frame, text="0", 
+                                            font=ctk.CTkFont(size=32, weight="bold"), text_color="#10b981")
+        self.total_ever_label.pack()
+        ctk.CTkLabel(self.telemetry_frame, text="TOTAL DETECTADOS", 
+                     font=ctk.CTkFont(size=9, weight="bold"), text_color="#64748b").pack(pady=(0, 10))
+        
+        self.uptime_label = ctk.CTkLabel(self.telemetry_frame, text="00:00:00", 
+                                        font=ctk.CTkFont(size=18, weight="bold"), text_color="#94a3b8")
+        self.uptime_label.pack()
+        ctk.CTkLabel(self.telemetry_frame, text="TIEMPO ACTIVO", 
+                     font=ctk.CTkFont(size=9, weight="bold"), text_color="#444").pack(pady=(0, 5))
+
+        self.breakdown_label = ctk.CTkLabel(self.telemetry_frame, text="", 
+                                           font=ctk.CTkFont(size=10), text_color="#64748b", justify="left")
+        self.breakdown_label.pack(pady=5)
 
         # 4. Logs
         l_frame = ctk.CTkFrame(self.dash, fg_color="transparent")
@@ -386,13 +412,22 @@ class VisionApp(ctk.CTk):
         self.controls = ctk.CTkFrame(inner, fg_color="transparent", height=50)
         self.controls.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 20))
         
-        self.rewind_btn = ctk.CTkButton(self.controls, text="⏪ -5s", command=lambda: self.engine.seek_back(5), width=70)
+        self.rewind_btn = ctk.CTkButton(self.controls, text="\uE892", width=40, height=32, 
+                                        fg_color="#1e293b", hover_color="#334155", text_color="#e2e8f0",
+                                        font=ctk.CTkFont(family="Segoe MDL2 Assets", size=14),
+                                        command=lambda: self.engine.seek_back(5))
         self.rewind_btn.pack(side="left", padx=(0, 5))
         
-        self.play_btn = ctk.CTkButton(self.controls, text="⏸ Pausa", command=self.toggle_pause, width=100)
+        self.play_btn = ctk.CTkButton(self.controls, text="\uE769", width=40, height=32, 
+                                      fg_color="#38bdf8", hover_color="#0ea5e9", text_color="#0f172a",
+                                      font=ctk.CTkFont(family="Segoe MDL2 Assets", size=14, weight="bold"),
+                                      command=self.toggle_pause)
         self.play_btn.pack(side="left", padx=5)
 
-        self.forward_btn = ctk.CTkButton(self.controls, text="+5s ⏩", command=lambda: self.engine.seek_forward(5), width=70)
+        self.forward_btn = ctk.CTkButton(self.controls, text="\uE893", width=40, height=32, 
+                                         fg_color="#1e293b", hover_color="#334155", text_color="#e2e8f0",
+                                         font=ctk.CTkFont(family="Segoe MDL2 Assets", size=14),
+                                         command=lambda: self.engine.seek_forward(5))
         self.forward_btn.pack(side="left", padx=(5, 10))
 
         # Indicador "EN DIRECTO" (Oculto por defecto)
@@ -413,7 +448,7 @@ class VisionApp(ctk.CTk):
         """Bucle de renderizado core con actualización de métricas."""
         t0 = time.time()
         
-        # 1. Captura de frame
+        # 1. Captura de frame (Ahora no bloquea gracias al lector por hilos)
         if not self.is_paused:
             frame = self.engine.get_frame()
             if frame is not None: 
@@ -422,29 +457,44 @@ class VisionApp(ctk.CTk):
                 self.is_paused = True
                 self.play_btn.configure(text="▶ Reproducir")
 
+        if self.raw_frame is None:
+            self.after(30, self.update_video)
+            return
+
         # 2. Inferencia (Controlada por frecuencia configurada)
         now = time.time()
         should_infer = (now - self.last_infer_time) >= self.infer_interval
         
-        if not self.is_inferencing and not self.is_loading_model and self.raw_frame is not None and should_infer:
+        if self.detector.model and not self.is_inferencing and not self.is_loading_model and should_infer:
             self.last_infer_time = now
             threading.Thread(target=self.run_inference, args=(self.raw_frame.copy(),), daemon=True).start()
 
         # 3. Renderizado (Sincronización Limpia)
-        with self._render_lock:
-            display = self.annotated_frame.copy() if self.annotated_frame is not None else (self.raw_frame.copy() if self.raw_frame is not None else None)
+        # Si no hay modelo, usamos el frame raw para ahorrar CPU, 
+        # pero copiamos solo si hay capas adicionales (Zonas/Heatmap) que lo modifiquen.
+        has_layers = bool(self.zones or self.heatmap_enabled)
+        
+        if self.detector.model is None:
+            display = self.raw_frame.copy() if has_layers else self.raw_frame
+            self.annotated_frame = None 
+            self.last_detections = []    
+        else:
+            with self._render_lock:
+                if self.annotated_frame is not None:
+                    display = self.annotated_frame.copy()
+                else:
+                    display = self.raw_frame.copy()
         
         if display is not None:
-            
-            # Capa de Zonas (Polígonos y conteos)
-            display = self._draw_zones_overlay(display)
-            
-            if self.heatmap_enabled: 
-                display = self._render_heatmap(display)
+            # Capas adicionales solo sobre una copia o si es el frame raw y se va a refrescar
+            if has_layers:
+                display = self._draw_zones_overlay(display)
+                if self.heatmap_enabled: 
+                    display = self._render_heatmap(display)
             
             self._render_canvas(display)
 
-        # 4. Actualizar Métricas en Sidebar
+        # 4. Actualizar Métricas en Sidebar (Ahora limitado internamente a 5 FPS)
         self._update_metrics(t0)
         
         # 5. Registrar en Telemetría (CSV) — Solo si hay detecciones activas
@@ -452,12 +502,17 @@ class VisionApp(ctk.CTk):
             zone_data = getattr(self, '_last_zone_counts', [])
             self.data_logger.log(self.last_detections, zone_data)
 
-        # 6. Sincronización
-        delay = 10
+        # 6. Sincronización Inteligente
+        # Calculamos el tiempo real que ha tomado el frame para ajustar el próximo
+        elapsed_ms = (time.time() - t0) * 1000
+        target_delay = 33 # Objetivo ~30 FPS para suavidad UI
+        
         if not self.engine.is_stream and not self.is_paused:
             fps = self.engine.get_fps()
-            delay = max(1, int(1000 / fps) - int((time.time() - t0) * 1000))
-        self.after(delay, self.update_video)
+            target_delay = 1000 / fps
+            
+        next_delay = max(1, int(target_delay - elapsed_ms))
+        self.after(next_delay, self.update_video)
 
     def _update_metrics(self, t0):
         """Delega la actualización de métricas al pintor visual."""
@@ -494,6 +549,25 @@ class VisionApp(ctk.CTk):
         except Exception as e:
             print(f"Error añadiendo evidencia UI: {e}")
 
+    def _update_bar_mode_buttons(self):
+        """Actualiza los botones de modo de la gráfica según las zonas disponibles."""
+        for w in self.bar_modes_frame.winfo_children():
+            w.destroy()
+            
+        modes = ["General"] + [f"Z{i+1}" for i in range(len(self.zones))]
+        for m in modes:
+            is_active = (self.bar_chart_mode == m)
+            btn = ctk.CTkButton(self.bar_modes_frame, text=m, width=50, height=20,
+                                font=ctk.CTkFont(size=9, weight="bold"),
+                                fg_color="#38bdf8" if is_active else "#1e293b",
+                                text_color="#0f172a" if is_active else "#94a3b8",
+                                command=lambda mode=m: self._set_bar_mode(mode))
+            btn.pack(side="left", padx=2)
+
+    def _set_bar_mode(self, mode):
+        self.bar_chart_mode = mode
+        self._update_bar_mode_buttons()
+
     def _draw_zones_overlay(self, frame):
         """Delega el dibujado de zonas al pintor visual."""
         frame = VisualPainter.draw_zones(frame, self.zones, self.last_detections)
@@ -505,9 +579,10 @@ class VisionApp(ctk.CTk):
         return result
 
     def _render_canvas(self, frame):
-        """Maneja el redimensionamiento y dibujado en el canvas de Tkinter."""
+        """Maneja el redimensionamiento y dibujado en el canvas de Tkinter de forma optimizada."""
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
         if w < 50 or h < 50: return
+        
         fh, fw = frame.shape[:2]
         aspect = fw / fh
         nw, nh = (w, int(w / aspect)) if w / h < aspect else (int(h * aspect), h)
@@ -515,10 +590,21 @@ class VisionApp(ctk.CTk):
         self._display_w, self._display_h = nw, nh
         self._img_offset_x, self._img_offset_y = (w - nw) // 2, (h - nh) // 2
 
-        resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        # Optimización: Solo redimensionar si es necesario y usar INTER_NEAREST para velocidad
+        if (nw, nh) != (fw, fh):
+            resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_NEAREST)
+        else:
+            resized = frame
+            
         img_tk = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)))
-        self.canvas.delete("all")
-        self.canvas.create_image(w // 2, h // 2, image=img_tk, anchor="center")
+        
+        # Optimización: Usar itemconfig en lugar de borrar todo el canvas
+        if not hasattr(self, '_canvas_img_id'):
+            self._canvas_img_id = self.canvas.create_image(w // 2, h // 2, image=img_tk, anchor="center")
+        else:
+            self.canvas.itemconfig(self._canvas_img_id, image=img_tk)
+            self.canvas.coords(self._canvas_img_id, w // 2, h // 2)
+            
         self.canvas.image = img_tk
 
     def run_inference(self, frame):
@@ -558,6 +644,13 @@ class VisionApp(ctk.CTk):
                 self.annotated_frame = ann
             
             # --- EVALUACIÓN DE HITOS / EVENTOS ---
+            for d in detections:
+                tid = d.get("track_id")
+                if tid is not None and tid not in self.session_seen_ids:
+                    self.session_seen_ids.add(tid)
+                    self.session_class_counts[d['label']] += 1
+                    self.total_detections_ever = len(self.session_seen_ids)
+            
             self.event_engine.update_cumulative_stats(detections)
             def on_evidence(img, msg, ok):
                 self.after(0, lambda: self.add_evidence(img, msg, ok))
@@ -576,29 +669,29 @@ class VisionApp(ctk.CTk):
         self.is_paused = not self.is_paused
         self.play_btn.configure(text="▶ Reproducir" if self.is_paused else "⏸ Pausa")
 
-    def change_stream(self):
-        src = self.url_entry.get().strip()
-        
-        # Inteligencia de Fallback: Si el campo está vacío, usar la URL activa
-        if not src:
-            src = self.url
-            self.add_log("Campo vacío. Reintentando con la fuente activa...")
-        else:
-            self.url = src # Actualizar fuente de verdad
-
-        # Sincronizar el campo de texto (especialmente útil si hubo fallback o cambio de calidad)
-        self.url_entry.delete(0, 'end')
-        self.url_entry.insert(0, self.url)
-
+    def change_stream(self, new_url=None):
+        if new_url:
+            self.url = new_url
+            
+        # Resetear telemetría de sesión
+        self.total_detections_ever = 0
+        self.session_start_time = time.time()
+        self.session_seen_ids = set()
+        self.session_class_counts = Counter()
+            
         resolution = self.stream_quality_var.get()
-        self.add_log(f"Configurando fuente: {os.path.basename(src) if os.path.exists(src) else src[:40]+'...'} ({resolution})")
+        self.add_log(f"Configurando fuente: {os.path.basename(self.url) if os.path.exists(self.url) else self.url[:40]+'...'} ({resolution})")
         
         # Iniciar reconexión en hilo para no bloquear UI
         def _reconnect_and_update():
-            self.engine.reconnect(src, resolution=resolution)
+            self.engine.reconnect(self.url, resolution=resolution)
             self.after(0, self._update_media_controls)
 
         threading.Thread(target=_reconnect_and_update, daemon=True).start()
+
+    def open_source_selector(self):
+        """Abre la ventana de selección de fuente de vídeo."""
+        SourceSelectorWindow(self, self.url, self.change_stream)
 
     def _update_media_controls(self):
         """Actualiza la visibilidad de los controles según si es directo o vídeo grabado."""
@@ -620,15 +713,24 @@ class VisionApp(ctk.CTk):
         if not is_live:
             self.forward_btn.pack(side="left", padx=(5, 10))
 
-        # Indicador de directo (Solo si es LIVE y es STREAM)
-        if is_stream and is_live:
-            self.live_indicator.pack(side="left", padx=10)
+        # Indicador de fuente y URL
+        self.live_indicator.pack(side="left", padx=10)
+        
+        if is_live:
+            self.live_dot.pack(side="left", padx=(0, 5))
+            self.live_dot.configure(font=ctk.CTkFont(family="Segoe MDL2 Assets", size=10))
+            self.live_text.configure(text="EN DIRECTO", text_color="#ef4444")
+            self.live_text.pack(side="left")
+        else:
+            self.live_dot.pack_forget()
+            self.live_text.configure(text="VOD", text_color="#64748b")
+            self.live_text.pack(side="left")
             
-            # Mostrar URL filtrada
-            url_text = self.url_entry.get().strip()
-            if len(url_text) > 45:
-                url_text = url_text[:42] + "..."
-            self.live_url_label.configure(text=f"|  {url_text}")
+        # Mostrar URL filtrada
+        url_text = self.url
+        if len(url_text) > 45:
+            url_text = url_text[:42] + "..."
+        self.live_url_label.configure(text=f"|  {url_text}")
         
         mode_desc = "Streaming LIVE" if is_live else ("YouTube VOD" if is_stream else "Video Local")
         self.add_log(f"Modo {mode_desc} detectado. UI actualizada.")
@@ -641,17 +743,15 @@ class VisionApp(ctk.CTk):
             self.live_dot.configure(text_color=new_color)
         self.after(800, self._blink_live_indicator)
 
-    def browse_file(self):
-        path = tk.filedialog.askopenfilename()
-        if path:
-            self.url = path
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, path)
-            self.change_stream()
-
     def add_log(self, msg):
-        self.log_textbox.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-        self.log_textbox.see("end")
+        """Añade un mensaje al log de forma segura desde cualquier hilo."""
+        def _task():
+            try:
+                if hasattr(self, 'log_textbox') and self.log_textbox.winfo_exists():
+                    self.log_textbox.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+                    self.log_textbox.see("end")
+            except: pass
+        self.after(0, _task)
 
     def export_telemetry(self):
         """Copia el archivo de log actual a una ubicación elegida por el usuario."""
@@ -665,9 +765,6 @@ class VisionApp(ctk.CTk):
             shutil.copy2(source, dest)
             self.add_log(f"Datos exportados a: {os.path.basename(dest)}")
 
-    def _section(self, text):
-        ctk.CTkLabel(self.sidebar, text=text, font=ctk.CTkFont(size=11, weight="bold"), text_color="#666").pack(pady=(10, 5), padx=20, anchor="w")
-
     def on_closing(self): self.engine.release(); self.destroy()
 
     def _save_config(self): save_app_config(self.url, self.zones, self.target_classes)
@@ -675,18 +772,38 @@ class VisionApp(ctk.CTk):
         cfg = load_app_config(self.url)
         if cfg: self.zones, self.target_classes = cfg.get("zones", []), cfg.get("target_classes")
 
-    def _on_family_change(self, family):
-        if not family: return
-        
-        # Mostrar u ocultar el bloque de búsqueda universal
-        if "world" in family.lower():
+    def _update_world_prompt_visibility(self, visible):
+        if visible:
             self.world_prompt_frame.pack(pady=10, padx=20, fill="x", after=self.scale_selector)
         else:
             self.world_prompt_frame.pack_forget()
 
-        aliases = list(self.detector.architectures.get(family, {}).get("aliases", {}).keys())
-        self.scale_selector.configure(values=aliases)
-        if aliases: self.scale_selector.set(aliases[0]); self._on_config_change()
+    def _on_no_model_click(self):
+        """Desactiva la IA y limpia selecciones de modelos."""
+        self.no_model_selector.set("🚫 DESACTIVAR PROCESAMIENTO IA")
+        self.model_selector.set("")
+        self.scale_selector.configure(values=[])
+        self.scale_selector.set("")
+        self.detector.model = None
+        self.detector.active_name = None
+        self.add_log("🚫 IA Desactivada. Renderizado en crudo.")
+        self._update_world_prompt_visibility(False)
+
+    def _on_family_change(self, family):
+        """Actualiza el selector de escalas según la familia."""
+        if not family: return
+        
+        # Desactivar el botón de "Sin Modelo" si se elige una familia
+        self.no_model_selector.set("")
+
+        # Mostrar u ocultar el bloque de búsqueda universal
+        self._update_world_prompt_visibility("world" in family.lower())
+
+        scales = sorted(self.detector.architectures.get(family, {}).get("aliases", {}).keys())
+        self.scale_selector.configure(values=scales)
+        if scales: 
+            self.scale_selector.set(scales[0])
+            self._on_config_change()
 
     def apply_world_prompt(self):
         """Aplica el texto del prompt al modelo YOLO-World de forma asíncrona."""
@@ -702,13 +819,40 @@ class VisionApp(ctk.CTk):
         threading.Thread(target=task, daemon=True).start()
 
     def _on_config_change(self, _=None):
+        """Recarga el modelo con la nueva configuración de familia/escala."""
+        family = self.model_selector.get()
+        alias = self.scale_selector.get()
+        
+        if not family or not alias:
+            return
+            
+        # Asegurar que el botón "Sin Modelo" esté desactivado
+        self.no_model_selector.set("")
+            
         def load():
             self.is_loading_model = True
-            self.detector.change_model(self.model_selector.get(), self.scale_selector.get())
-            # Update Hardware Label based on the selected model's backend
-            backend_info = "GPU" if getattr(self.detector, 'active_device', 'CPU') == "GPU" else "CPU"
-            self.hw_label.configure(text=f"PROCESAMIENTO: {backend_info} ({self.detector.hardware_diag['gpu_vendor']})")
-            self.is_loading_model = False
+            try:
+                self.add_log(f"Cargando modelo: {family} ({alias})...")
+                
+                success = self.detector.change_model(family, alias)
+                
+                if success:
+                    # Actualizar Etiqueta de Hardware de forma segura
+                    backend = getattr(self.detector, 'active_device', 'CPU')
+                    vendor = self.detector.hardware_diag.get('gpu_vendor', 'Unknown')
+                    def _update_ui():
+                        self.hw_label.configure(text=f"PROCESAMIENTO: {backend} ({vendor})", text_color="#10b981")
+                        self.add_log(f"✅ Modelo {success} cargado correctamente.")
+                    self.after(0, _update_ui)
+                else:
+                    def _update_err():
+                        self.hw_label.configure(text="ERROR AL CARGAR MODELO", text_color="#ef4444")
+                        self.add_log("❌ Error crítico: No se pudo cargar el modelo.")
+                    self.after(0, _update_err)
+            except Exception as e:
+                self.add_log(f"⚠️ Error en hilo de carga: {e}")
+            finally:
+                self.is_loading_model = False
         threading.Thread(target=load, daemon=True).start()
 
     def _on_model_added(self):
@@ -754,7 +898,10 @@ class VisionApp(ctk.CTk):
         self.is_drawing_zone = not self.is_drawing_zone
         self.draw_btn.configure(text="Listo" if self.is_drawing_zone else "Dibujar")
 
-    def clear_zones(self): self.zones = []; self._save_config()
+    def clear_zones(self): 
+        self.zones = []
+        self._save_config()
+        self._update_bar_mode_buttons()
     def _on_video_click(self, e): 
         if self.is_drawing_zone: 
             self.current_zone.append(((e.x-self._img_offset_x)/self._display_w, (e.y-self._img_offset_y)/self._display_h))
@@ -800,7 +947,11 @@ class VisionApp(ctk.CTk):
 
     def _on_video_right_click(self, e):
         if self.is_drawing_zone and len(self.current_zone) >= 3:
-            self.zones.append(self.current_zone); self.current_zone = []; self.toggle_zone_drawing(); self._save_config()
+            self.zones.append(self.current_zone)
+            self.current_zone = []
+            self.toggle_zone_drawing()
+            self._save_config()
+            self._update_bar_mode_buttons()
 
     def _on_conf_change(self, value):
         self.conf_threshold = value
@@ -818,34 +969,63 @@ class VisionApp(ctk.CTk):
     # --- LÓGICA DE CAPTURA PARA DATASETS ---
 
     def take_capture(self):
-        """Captura instantánea: pausa, congela el frame actual, y abre el anotador."""
-        if self.raw_frame is None:
-            self.add_log("No hay video para capturar.")
-            return
-
-        class_name = self.capture_entry.get().strip().lower().replace(" ", "_")
-        if not class_name:
-            self.add_log("⚠️ Escribe un nombre de clase antes de capturar.")
-            self.capture_entry.focus_set()
-            return
-
-        # Congelar frame ANTES de pausar (captura instantánea del momento exacto)
-        captured_frame = self.raw_frame.copy()
-        
-        # Pausar si no lo está
-        self._was_paused_before_capture = self.is_paused
-        if not self.is_paused:
-            self.toggle_pause()
-
+        """Captura instantánea: pausa, congela el frame actual, y abre el anotador multi-clase."""
         try:
-            dataset_dir = ensure_dataset_structure(class_name)
-            base_name = get_next_capture_filename(class_name, dataset_dir)
+            self.add_log("--- DEBUG CAPTURA 1: Inicio ---")
+            if self.raw_frame is None:
+                self.add_log("⚠️ Error: No hay señal de vídeo para capturar.")
+                return
+
+            ds_name = self.capture_entry.get().strip()
+            if not ds_name:
+                ds_name = f"dataset_{time.strftime('%d-%m-%Y')}"
+            ds_name = ds_name.lower().replace(" ", "_")
             
-            # Abrir ventana de anotación con el frame congelado
-            AnnotationWindow(self, captured_frame, class_name, base_name, dataset_dir, 
+            # Asegurar que DATASETS_DIR existe
+            if not os.path.exists(DATASETS_DIR):
+                os.makedirs(DATASETS_DIR, exist_ok=True)
+                
+            dataset_dir = os.path.join(DATASETS_DIR, ds_name)
+            self.add_log(f"📸 Iniciando captura para: '{ds_name}'")
+
+            # 1. Dialogo
+            if ds_name not in self._checked_datasets and os.path.exists(dataset_dir):
+                self.add_log("❓ Esperando respuesta del usuario (Dialogo)...")
+                resp = messagebox.askyesnocancel("Dataset Existente", 
+                    f"El dataset '{ds_name}' ya existe.\n\n¿Borrar y empezar de nuevo?", parent=self)
+                if resp is None: 
+                    self.add_log("❌ Captura cancelada por el usuario.")
+                    return 
+                if resp:
+                    shutil.rmtree(dataset_dir)
+                    self.add_log("🗑️ Dataset borrado.")
+            
+            self._checked_datasets.add(ds_name)
+
+            self.add_log("--- DEBUG CAPTURA 2: Frame Copy ---")
+            captured_frame = self.raw_frame.copy()
+            self.add_log(f"✅ Frame copiado: {captured_frame.shape}")
+            
+            self._was_paused_before_capture = self.is_paused
+            if not self.is_paused:
+                self.add_log("⏸️ Intentando pausar...")
+                self.toggle_pause()
+                self.add_log("✅ Pausado.")
+
+            self.add_log("--- DEBUG CAPTURA 3: Estructura ---")
+            actual_dir = ensure_dataset_structure(ds_name)
+            self.add_log(f"✅ Dir: {actual_dir}")
+            base_name = get_next_capture_filename(ds_name, actual_dir)
+            self.add_log(f"✅ File: {base_name}")
+            
+            self.add_log("--- DEBUG CAPTURA 4: Abriendo Ventana ---")
+            AnnotationWindow(self, captured_frame, ds_name, base_name, actual_dir, 
                            self._on_capture_saved, self._on_capture_cancelled)
+            self.add_log("✅ Ventana instanciada.")
         except Exception as e:
-            self.add_log(f"Error preparando captura: {e}")
+            self.add_log(f"❌ FALLO GLOBAL CAPTURA: {e}")
+            import traceback
+            print(traceback.format_exc()) # Enviar a consola real para debug profundo
             if not self._was_paused_before_capture:
                 self.toggle_pause()
 
@@ -889,5 +1069,144 @@ class VisionApp(ctk.CTk):
             self.add_log(f"📦 Dataset exportado: {os.path.basename(dest)}")
         except Exception as e:
             self.add_log(f"Error exportando dataset: {e}")
+
+    def import_zip_dataset(self):
+        """Importa un ZIP de imágenes, las extrae y abre el anotador secuencial."""
+        import zipfile
+        from ..utils.helpers import DATASETS_DIR, ensure_dataset_structure
+        
+        file_path = tk.filedialog.askopenfilename(
+            title="Seleccionar ZIP de imágenes para etiquetar",
+            filetypes=[("Archivo ZIP", "*.zip")]
+        )
+        if not file_path:
+            return
+            
+        ds_name = self.capture_entry.get().strip()
+        if not ds_name:
+            ds_name = f"import_{time.strftime('%H%M%S')}"
+        ds_name = ds_name.lower().replace(" ", "_")
+        
+        dataset_dir = ensure_dataset_structure(ds_name)
+        if not dataset_dir:
+            self.add_log("❌ Error creando estructura de dataset.")
+            return
+
+        self.add_log(f"📂 Importando ZIP: {os.path.basename(file_path)}...")
+        
+        try:
+            # Extraer imágenes a la carpeta 'images/train' del dataset
+            target_img_dir = os.path.join(dataset_dir, "images", "train")
+            
+            image_paths = []
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                for info in zf.infolist():
+                    if info.is_dir(): continue
+                    ext = os.path.splitext(info.filename)[1].lower()
+                    if ext in ['.jpg', '.jpeg', '.png', '.bmp']:
+                        # Extraer aplanado (sin carpetas internas del zip para simplificar)
+                        filename = os.path.basename(info.filename)
+                        dest_path = os.path.join(target_img_dir, filename)
+                        
+                        with zf.open(info) as source, open(dest_path, "wb") as target:
+                            shutil.copyfileobj(source, target)
+                        
+                        image_paths.append(dest_path)
+            
+            if not image_paths:
+                self.add_log("⚠️ El ZIP no contiene imágenes válidas.")
+                return
+                
+            self.add_log(f"✅ {len(image_paths)} imágenes importadas en '{ds_name}'.")
+            
+            # Abrir AnnotationWindow en modo múltiple
+            AnnotationWindow(self, 
+                             ds_name=ds_name, 
+                             dataset_dir=dataset_dir, 
+                             on_save=self._on_capture_saved, 
+                             image_files=image_paths)
+            
+        except Exception as e:
+            self.add_log(f"❌ Error al importar ZIP: {e}")
+
+    # --- LÓGICA DE AUTOCAPTURA PERIÓDICA ---
+
+    def toggle_auto_capture(self):
+        """Alterna el estado de la autocaptura periódica."""
+        if self.is_auto_capturing:
+            self.stop_auto_capture()
+        else:
+            self.start_auto_capture()
+
+    def start_auto_capture(self):
+        """Inicia el proceso de captura automática."""
+        try:
+            val = self.auto_capture_interval.get().strip()
+            interval = float(val) if val else 5.0
+            if interval <= 0: raise ValueError
+        except ValueError:
+            self.add_log("⚠️ Intervalo de autocaptura no válido (usa un número > 0).")
+            return
+
+        # Determinar nombre del dataset (usar el de la entrada si existe)
+        ds_name = self.capture_entry.get().strip()
+        if not ds_name:
+            ds_name = f"auto_{time.strftime('%d%m%Y_%H%M')}"
+        ds_name = ds_name.lower().replace(" ", "_")
+        
+        # Preparar carpeta
+        from ..utils.helpers import ensure_dataset_structure
+        self.auto_dataset_dir = ensure_dataset_structure(ds_name)
+        if not self.auto_dataset_dir:
+            self.add_log("❌ Error creando carpeta para autocaptura.")
+            return
+
+        self.auto_ds_name = ds_name
+        self.is_auto_capturing = True
+        self.auto_capture_btn.configure(text="⏹ Parar", fg_color="#ef4444", hover_color="#dc2626")
+        self.add_log(f"📸 Autocaptura iniciada: cada {interval}s en '{ds_name}'")
+        
+        # Iniciar bucle
+        self._run_auto_capture_loop()
+
+    def stop_auto_capture(self):
+        """Detiene la autocaptura y abre la carpeta de resultados."""
+        self.is_auto_capturing = False
+        self.auto_capture_btn.configure(text="▶ Auto", fg_color="#10b981", hover_color="#059669")
+        self.add_log("⏹ Autocaptura detenida.")
+        
+        # Abrir carpeta (Solo en Windows)
+        if hasattr(self, 'auto_dataset_dir') and os.path.exists(self.auto_dataset_dir):
+            img_path = os.path.abspath(os.path.join(self.auto_dataset_dir, "images", "train"))
+            if os.path.exists(img_path):
+                self.add_log(f"📂 Abriendo carpeta: {img_path}")
+                try:
+                    os.startfile(img_path)
+                except Exception as e:
+                    self.add_log(f"⚠️ No se pudo abrir la carpeta: {e}")
+
+    def _run_auto_capture_loop(self):
+        """Bucle interno de guardado de frames."""
+        if not self.is_auto_capturing:
+            return
+        
+        if self.raw_frame is not None:
+            from ..utils.helpers import get_next_capture_filename
+            base_name = get_next_capture_filename(self.auto_ds_name, self.auto_dataset_dir)
+            full_path = os.path.join(self.auto_dataset_dir, "images", "train", f"{base_name}.jpg")
+            
+            # Guardar frame actual de forma segura
+            cv2.imwrite(full_path, self.raw_frame)
+            self.add_log(f"📸 Frame guardado: {base_name}")
+        else:
+            self.add_log("⚠️ Autocaptura: Esperando señal de vídeo...")
+            
+        # Programar siguiente
+        try:
+            interval_ms = int(float(self.auto_capture_interval.get()) * 1000)
+        except:
+            interval_ms = 5000
+            
+        self.after(interval_ms, self._run_auto_capture_loop)
 
 

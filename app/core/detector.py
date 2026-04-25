@@ -152,24 +152,27 @@ class ObjectDetector:
         try:
             is_openvino = os.path.isdir(model_path)
             if "rtdetr" in family.lower() or "rtdetr" in target_name.lower():
-                self.model = RTDETR(model_path)
+                new_model = RTDETR(model_path)
             else:
-                self.model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
+                new_model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
 
             target_device = "CPU"
             if is_openvino and self.hardware_diag["gpu_vendor"] == "Intel":
                 target_device = "GPU"
             
+            # Prueba de vida del modelo
             dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-            self.model(dummy, verbose=False)
+            new_model(dummy, verbose=False)
             
+            # Si todo ha ido bien, actualizamos el modelo activo
+            self.model = new_model
             self.current_family = family
             self.active_name = target_name
             self.is_openvino_active = is_openvino
             self.active_device = target_device
             return target_name
         except Exception as e:
-            log_error("EXE-COR-LOAD-03", f"Error cargando modelo {target_name}: {e}")
+            log_error("EXE-COR-LOAD-03", f"Fallo crítico cargando {target_name}: {e}")
             return None
     def set_world_prompt(self, prompt_text):
         """Configura clases personalizadas en un modelo YOLO-World activo."""

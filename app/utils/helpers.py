@@ -19,6 +19,7 @@ LOGS_DIR = os.path.join(ROOT_DIR, "telemetry_logs")
 # Archivos específicos
 ZONES_CONFIG = os.path.join(CONFIG_DIR, "zones.json")
 EVENTS_CONFIG = os.path.join(CONFIG_DIR, "events_config.json")
+FAVORITES_CONFIG = os.path.join(CONFIG_DIR, "favorites.json")
 
 # Asegurar existencia de carpetas críticas
 os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -110,3 +111,24 @@ def load_app_config(source_url):
     except Exception as e:
         log_error("EXE-UTL-HELP-02", f"Error al cargar config de zonas: {e}")
         return None
+
+def save_favorites(favorites):
+    """Guarda la lista de fuentes favoritas."""
+    try:
+        with open(FAVORITES_CONFIG, "w", encoding="utf-8") as f:
+            json.dump(favorites, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        log_error("EXE-UTL-HELP-02", f"Error al guardar favoritos: {e}")
+        return False
+
+def load_favorites():
+    """Carga la lista de fuentes favoritas."""
+    try:
+        if not os.path.exists(FAVORITES_CONFIG):
+            return []
+        with open(FAVORITES_CONFIG, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        log_error("EXE-UTL-HELP-02", f"Error al cargar favoritos: {e}")
+        return []

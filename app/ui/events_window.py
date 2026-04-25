@@ -21,6 +21,50 @@ COOLDOWN_PRESETS = [
     ("1 min", 60), ("5 min", 300), ("Sin límite", 0),
 ]
 
+class EventsHelpWindow(ctk.CTkToplevel):
+    """Ventana informativa sobre el funcionamiento de los Hitos y Eventos."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Guía de Hitos y Eventos")
+        self.geometry("500x550")
+        self.grab_set()
+        self.resizable(False, False)
+
+        ctk.CTkLabel(self, text="📚 MANUAL DE REGLAS INTELIGENTES", 
+                     font=ctk.CTkFont(size=16, weight="bold"), text_color="#38bdf8").pack(pady=(20, 15))
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self._add_topic(scroll, "🔹 Nombre del Hito", 
+                        "Es el identificador de la alerta. Aparecerá en los logs y en los mensajes de Telegram/Webhook.")
+        
+        self._add_topic(scroll, "🔹 Clase", 
+                        "El tipo de objeto que activará la regla. 'Cualquiera' sirve para detectar cualquier movimiento.")
+        
+        self._add_topic(scroll, "🔹 Condición y Valor", 
+                        "La lógica matemática (>, <, ==). 'Total >' permite disparar alertas basadas en el conteo histórico acumulado.")
+        
+        self._add_topic(scroll, "🔹 Zona", 
+                        "Define si la regla aplica a todo el vídeo (Global) o a una de las zonas poligonales que hayas dibujado.")
+        
+        self._add_topic(scroll, "🔹 Acción", 
+                        "- Solo Log: Registra en la base de datos interna.\n- Telegram/Webhook: Envía notificaciones externas con foto.\n- Voz: Avisa por los altavoces mediante IA.")
+        
+        self._add_topic(scroll, "🔹 Cooldown", 
+                        "Tiempo de espera obligatorio tras un disparo para evitar saturar el sistema con alertas repetidas.")
+
+        self._add_topic(scroll, "📂 ¿Dónde se guarda todo?", 
+                        "1. Reglas: En 'config/events_config.json'.\n2. Evidencias: En 'telemetry_logs/evidences/'.\n3. Historial: En la base de datos SQLite 'telemetry_logs/vision_events.db'.")
+
+        ctk.CTkButton(self, text="Entendido", command=self.destroy, fg_color="#334155").pack(pady=20)
+
+    def _add_topic(self, parent, title, text):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.pack(fill="x", pady=8)
+        ctk.CTkLabel(f, text=title, font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8", anchor="w").pack(fill="x")
+        ctk.CTkLabel(f, text=text, font=ctk.CTkFont(size=11), text_color="#94a3b8", justify="left", wraplength=420).pack(fill="x", pady=(2, 0))
+
 class EventsWindow(ctk.CTkToplevel):
     """
     Interfaz completa para gestionar Hitos y Eventos con configuración flexible.
@@ -40,9 +84,20 @@ class EventsWindow(ctk.CTkToplevel):
         # Header
         header = ctk.CTkFrame(self, fg_color="#0f172a", corner_radius=0)
         header.pack(fill="x")
-        ctk.CTkLabel(header, text="HITOS Y AVISOS", 
+        
+        # Título con botón de ayuda a la derecha
+        title_row = ctk.CTkFrame(header, fg_color="transparent")
+        title_row.pack(pady=(12, 0), padx=20, fill="x")
+        
+        ctk.CTkLabel(title_row, text="HITOS Y AVISOS", 
                      font=ctk.CTkFont(size=20, weight="bold"), 
-                     text_color="#38bdf8").pack(pady=12)
+                     text_color="#38bdf8").pack(side="left", expand=True, padx=(40, 0))
+        
+        ctk.CTkButton(title_row, text="❓", width=30, height=30, corner_radius=15,
+                      fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      command=lambda: EventsHelpWindow(self)).pack(side="right")
+
         ctk.CTkLabel(header, text="Configura reglas inteligentes que se disparan en tiempo real", 
                      font=ctk.CTkFont(size=11), 
                      text_color="#64748b").pack(pady=(0, 10))

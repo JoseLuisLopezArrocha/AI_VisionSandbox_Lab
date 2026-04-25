@@ -94,53 +94,76 @@ class VisualPainter:
 
     @staticmethod
     def update_sidebar_metrics(app, t0, detections, zones):
-        """Actualiza las etiquetas de la interfaz basándose en los datos actuales."""
+        """Actualiza las etiquetas de la interfaz con frecuencia controlada (5 FPS)."""
         try:
-            # Tiempo de proceso total (Render)
-            elapsed = int((time.time() - t0) * 1000)
-            if hasattr(app, 'infer_label'):
-                app.infer_label.configure(text=f"PROCESO: {elapsed} ms")
+            now = time.time()
+            if not hasattr(app, '_last_metrics_update'): app._last_metrics_update = 0
             
-            # Conteo total
-            total = len(detections)
-            app.count_label.configure(text=f"OBJETOS: {total}")
+            # Solo actualizar etiquetas de texto 5 veces por segundo
+            should_update_text = (now - app._last_metrics_update >= 0.2)
+            
+            if should_update_text:
+                app._last_metrics_update = now
+                
+                # Tiempo de proceso total (Render)
+                elapsed = int((time.time() - t0) * 1000)
+                if hasattr(app, 'infer_label'):
+                    app.infer_label.configure(text=f"PROCESO: {elapsed} ms")
+                
+                # Conteo total
+                total = len(detections)
+                app.count_label.configure(text=f"OBJETOS: {total}")
 
-            # Conteos por zonas
+                # Conteos por zonas
+                if zones:
+                    zone_counts = Counter()
+                    for d in detections:
+                        z_indices = d.get("zone_indices", [])
+                        for zi in z_indices:
+                            if zi >= 0:
+                                zone_counts[zi] += 1
+                    
+                    z_text = " • ".join([f"Z{i+1}: {zone_counts[i]}" for i in range(len(zones))])
+                    app.zone_counts_label.configure(text=z_text)
+                else:
+                    app.zone_counts_label.configure(text="Conteo global")
+
+                # Actualizar telemetría de sesión
+                if hasattr(app, 'total_ever_label'):
+                    app.total_ever_label.configure(text=f"{app.total_detections_ever:,}")
+                
+                if hasattr(app, 'uptime_label') and app.session_start_time:
+                    uptime_sec = int(time.time() - app.session_start_time)
+                    hrs = uptime_sec // 3600
+                    mins = (uptime_sec % 3600) // 60
+                    secs = uptime_sec % 60
+                    app.uptime_label.configure(text=f"{hrs:02d}:{mins:02d}:{secs:02d}")
+
+                if hasattr(app, 'breakdown_label'):
+                    top = app.session_class_counts.most_common(5)
+                    if top:
+                        txt = "TOP 5 ÚNICOS:\n" + "\n".join([f"• {k.upper()}: {v}" for k, v in top])
+                        app.breakdown_label.configure(text=txt)
+                    else:
+                        app.breakdown_label.configure(text="Sin datos únicos")
+
+            # La gráfica ya tiene su propio control de tiempo interno, pero la llamamos siempre
+            # para que use el historial de detecciones si es necesario.
+            if now - getattr(app, '_last_bar_draw', 0) >= 0.2:
+                if hasattr(app, 'bar_canvas'):
+                    VisualPainter.draw_bar_chart(app, app.bar_canvas, getattr(app, 'last_detections', []))
+                app._last_bar_draw = now
+
+            # Retornar conteos de zonas para el logger (esto sí cada frame si se requiere precisión)
             zone_current_counts = []
             if zones:
-                zone_counts = Counter()
+                z_counts = Counter()
                 for d in detections:
-                    # Soporte multizona: el objeto puede sumar a varias zonas si se solapan
-                    z_indices = d.get("zone_indices", [])
-                    for zi in z_indices:
-                        if zi >= 0:
-                            zone_counts[zi] += 1
-                
+                    for zi in d.get("zone_indices", []):
+                        if zi >= 0: z_counts[zi] += 1
                 for i in range(len(zones)):
-                    zone_current_counts.append(zone_counts[i])
-
-                z_text = " • ".join([f"Z{i+1}: {zone_counts[i]}" for i in range(len(zones))])
-                app.zone_counts_label.configure(text=z_text)
-            else:
-                app.zone_counts_label.configure(text="Conteo global")
-
-            # Actualizar historial para el gráfico (Mantener últimos 30 segundos)
-            if not hasattr(app, 'history_buffer'):
-                app.history_buffer = []
+                    zone_current_counts.append(z_counts[i])
             
-            now_ms = time.time()
-            if not hasattr(app, 'last_history_update') or now_ms - app.last_history_update >= 1.0:
-                app.history_buffer.append(total)
-                if len(app.history_buffer) > 30:
-                    app.history_buffer.pop(0)
-                app.last_history_update = now_ms
-
-            # Dibujar Gráficos en el Dashboard
-            if hasattr(app, 'bar_canvas'):
-                VisualPainter.draw_bar_chart(app.bar_canvas, detections)
-            if hasattr(app, 'line_canvas'):
-                VisualPainter.draw_line_chart(app.line_canvas, app.history_buffer)
-
             return zone_current_counts
         except Exception as e:
             # Fallo silencioso en métricas para no crashear el core
@@ -159,56 +182,75 @@ class VisualPainter:
         return frame
 
     @staticmethod
-    def draw_bar_chart(canvas, detections):
-        """Dibuja gráfico de barras de distribución."""
+    def draw_bar_chart(app, canvas, detections):
+        """Dibuja gráfico de barras interactivo con soporte de zonas."""
         canvas.delete("all")
         w, h = canvas.winfo_width(), canvas.winfo_height()
         if w < 50 or h < 50: return
 
-        counts = Counter([d['label'] for d in detections])
+        # --- FILTRADO POR MODO DE GRÁFICA (ZONAS) ---
+        mode = getattr(app, 'bar_chart_mode', 'General')
+        filtered_detections = detections
+        if mode != "General":
+            try:
+                zone_idx = int(mode[1:]) - 1 # De "Z1" sacamos 0
+                filtered_detections = [d for d in detections if zone_idx in d.get("zone_indices", [])]
+            except:
+                pass
+        
+        # Agrupar por class_id para que el filtrado sea preciso
+        labels_map = {}
+        counts = Counter()
+        for d in filtered_detections:
+            cid = d['class_id']
+            labels_map[cid] = d['label']
+            counts[cid] += 1
+            
         if not counts:
-            canvas.create_text(w/2, h/2, text="Sin detecciones", fill="#444", font=("Arial", 10))
+            txt = "Sin detecciones" if mode == "General" else f"Sin datos en {mode}"
+            canvas.create_text(w/2, h/2, text=txt, fill="#444", font=("Arial", 10))
             return
 
-        labels = list(counts.keys())[:6]
-        vals = [counts[l] for l in labels]
-        max_val = max(vals) if vals else 1
+        sorted_cids = sorted(counts.keys(), key=lambda x: counts[x], reverse=True)[:6]
+        max_val = max(counts.values()) if counts else 1
         
         padding = 30
         bar_area_h = h - 60
-        bar_w = (w - (padding * 2)) / len(labels)
+        bar_w = (w - (padding * 2)) / len(sorted_cids)
         
-        for i, (label, val) in enumerate(zip(labels, vals)):
+        def on_bar_click(cid):
+            # Lógica de alternancia (Toggle)
+            if app.target_classes and cid in app.target_classes and len(app.target_classes) == 1:
+                app.target_classes = None
+                app.add_log("Filtro de clase deshabilitado.")
+            else:
+                app.target_classes = [cid]
+                app.add_log(f"Filtrando solo clase: {labels_map[cid].upper()}")
+            # Forzar redibujado inmediato tras clic
+            VisualPainter.draw_bar_chart(app, canvas, filtered_detections)
+
+        # Vincular evento general una sola vez (Tkinter find_withtag es más robusto)
+        canvas.tag_bind("bar_obj", "<Button-1>", lambda e: None) # Placeholder
+
+        for i, cid in enumerate(sorted_cids):
+            val = counts[cid]
+            label = labels_map[cid]
             bh = (val / max_val) * bar_area_h
             x0 = padding + i * bar_w
-            canvas.create_rectangle(x0, h - 30 - bh, x0 + bar_w - 10, h - 30, fill="#0ea5e9", outline="")
-            canvas.create_text(x0 + (bar_w-10)/2, h - 15, text=label, fill="#94a3b8", font=("Arial", 9))
-            canvas.create_text(x0 + (bar_w-10)/2, h - 45 - bh, text=str(val), fill="#fff", font=("Arial", 9, "bold"))
-
-    @staticmethod
-    def draw_line_chart(canvas, history):
-        """Dibuja gráfico de línea de tendencia temporal."""
-        canvas.delete("all")
-        w, h = canvas.winfo_width(), canvas.winfo_height()
-        if w < 50 or h < 50 or not history: return
-
-        max_h = max(max(history), 5)
-        padding = 30
-        plot_w = w - (padding * 2)
-        plot_h = h - 60
-        
-        step_x = plot_w / 30
-        pts = []
-        for i, val in enumerate(history):
-            pts.extend([padding + i * step_x, (h - 30) - (val / max_h) * plot_h])
-        
-        if len(pts) >= 4:
-            canvas.create_line(pts, fill="#10b981", width=3, smooth=True)
-            poly_pts = [padding, h - 30] + pts + [pts[-2], h - 30]
-            canvas.create_polygon(poly_pts, fill="#10b981", stipple="gray25", outline="")
-
-        canvas.create_text(padding, 20, text=f"MÁXIMO: {max(history)}", fill="#10b981", anchor="nw", font=("Arial", 8, "bold"))
-    _track_history = {} # Historial de trayectorias {id: [(x,y), ...]}
+            
+            # Color especial si está filtrado
+            is_filtered = app.target_classes and cid in app.target_classes
+            color = "#f59e0b" if is_filtered else "#0ea5e9"
+            
+            tag = f"bar_{cid}"
+            rect_id = canvas.create_rectangle(x0, h - 30 - bh, x0 + bar_w - 10, h - 30, 
+                                            fill=color, outline="", tags=(tag, "bar_obj"))
+            
+            canvas.create_text(x0 + (bar_w-10)/2, h - 15, text=label, fill="#94a3b8", font=("Arial", 9), tags=(tag, "bar_obj"))
+            canvas.create_text(x0 + (bar_w-10)/2, h - 45 - bh, text=str(val), fill="#fff", font=("Arial", 9, "bold"), tags=(tag, "bar_obj"))
+            
+            # Bind click (Uso de clausura con cid actual)
+            canvas.tag_bind(tag, "<Button-1>", lambda e, c=cid: on_bar_click(c))
 
     @staticmethod
     def draw_detections(frame, detections, is_focus=False, show_trails=True):
