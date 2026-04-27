@@ -90,13 +90,21 @@ class HardwareManager:
         return diag
 
     @staticmethod
-    def get_backend_for_ultralytics() -> str:
-        """Devuelve el string que Ultralytics espera para el dispositivo."""
+    def get_backend_for_ultralytics() -> Any:
+        """
+        Devuelve el identificador de dispositivo óptimo para Ultralytics (modelos .pt).
+        Retorna un int (0), torch.device o "cpu".
+        """
         diag = HardwareManager.get_diagnostics()
+        
         if diag["best_backend"] == "cuda":
-            return "0"
-        elif "openvino" in diag["best_backend"]:
-            return "openvino"
+            return 0  # GPU NVIDIA
+            
         elif diag["best_backend"] == "directml":
-            return "directml"
+            try:
+                import torch_directml
+                return torch_directml.device()
+            except ImportError:
+                return "cpu"
+                
         return "cpu"

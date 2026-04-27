@@ -41,6 +41,7 @@ class ObjectDetector:
             log_error("EXE-COR-HW-04", f"Error en diagnóstico inicial: {e}")
             self.hardware_diag = {"gpu_vendor": "Unknown", "best_backend": "cpu"}
 
+        self.device = HardwareManager.get_backend_for_ultralytics()
         self.architectures = {}
         self.scan_models()
         self._load_custom_models()
@@ -108,7 +109,7 @@ class ObjectDetector:
                 try:
                     m = YOLO(path)
                     dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-                    m(dummy, verbose=False)
+                    m(dummy, verbose=False, device=self.device)
                     self.custom_models.append((m, f))
                 except Exception as e:
                     log_error("EXE-COR-LOAD-03", f"Error cargando modelo custom {f}: {e}")
@@ -162,7 +163,7 @@ class ObjectDetector:
             
             # Prueba de vida del modelo
             dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-            new_model(dummy, verbose=False)
+            new_model(dummy, verbose=False, device=self.device)
             
             # Si todo ha ido bien, actualizamos el modelo activo
             self.model = new_model
@@ -202,7 +203,21 @@ class ObjectDetector:
 
         try:
             h_frame, w_frame = frame.shape[:2]
-            kwargs = {"persist": True, "conf": conf_threshold, "verbose": False}
+            
+            # Selección dinámica de dispositivo
+            if getattr(self, 'is_openvino_active', False):
+                # Para modelos OpenVINO, Ultralytics espera "cpu", "gpu" o "vpu"
+                target_device = "gpu" if getattr(self, 'active_device', 'CPU') == "GPU" else "cpu"
+            else:
+                # Para modelos .pt (PyTorch), usamos el backend detectado
+                target_device = self.device
+
+            kwargs = {
+                "persist": True, 
+                "conf": conf_threshold, 
+                "verbose": False,
+                "device": target_device
+            }
                 
             results = self.model.track(frame, **kwargs)
             detections = []

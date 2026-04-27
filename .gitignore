@@ -16,6 +16,7 @@ events_config.json
 # Datos y Logs
 telemetry_logs/
 *.log
+*.pt
 app_debug.log
 crash_log.txt
 startup_error.log
