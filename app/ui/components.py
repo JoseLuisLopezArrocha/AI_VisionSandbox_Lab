@@ -40,7 +40,8 @@ class AnnotationWindow(ctk.CTkToplevel):
         self.base_name = base_name
 
         if self.image_files:
-            self._load_image_data(0)
+            self.current_index = self._find_first_unlabeled()
+            self._load_image_data(self.current_index)
         
         self.title(f"Anotar: {self.base_name}")
         
@@ -62,6 +63,7 @@ class AnnotationWindow(ctk.CTkToplevel):
 
         win_w, win_h = self.disp_w + 220, self.disp_h + 120
         self.geometry(f"{win_w}x{win_h}")
+        self.protocol("WM_DELETE_WINDOW", self._on_close_x)
         self.grab_set()
 
         # Layout principal
@@ -118,16 +120,28 @@ class AnnotationWindow(ctk.CTkToplevel):
             nav_frame = ctk.CTkFrame(bottom, fg_color="transparent")
             nav_frame.pack(side="right", padx=10)
             
-            ctk.CTkButton(nav_frame, text="⬅️", width=40, command=self._prev_image, fg_color="#334155").pack(side="left", padx=2)
+            ctk.CTkButton(nav_frame, text="<", width=40, command=self._prev_image, fg_color="#334155").pack(side="left", padx=2)
             self.index_label = ctk.CTkLabel(nav_frame, text=f"1 / {len(self.image_files)}", font=ctk.CTkFont(size=11, weight="bold"))
             self.index_label.pack(side="left", padx=5)
-            ctk.CTkButton(nav_frame, text="➡️", width=40, command=self._next_image, fg_color="#334155").pack(side="left", padx=2)
+            ctk.CTkButton(nav_frame, text=">", width=40, command=self._next_image, fg_color="#334155").pack(side="left", padx=2)
 
-        ctk.CTkButton(bottom, text="💾 Guardar", width=100, command=self._save_and_stay, fg_color="#16a34a", hover_color="#15803d").pack(side="right", padx=(5, 0))
+        # Botón de Guardar (Sigue en la misma imagen)
+        ctk.CTkButton(bottom, text="GUARDAR CAMBIOS", width=160, command=self._save_and_stay, 
+                      fg_color="#22c55e", hover_color="#16a34a", font=ctk.CTkFont(size=12, weight="bold"),
+                      text_color="#052e16").pack(side="right", padx=(5, 0))
+        
+        # Botón de Guardar y Salir (Para sesiones a medias)
+        ctk.CTkButton(bottom, text="GUARDAR Y SALIR", width=150, command=self._save_and_exit, 
+                      fg_color="#38bdf8", hover_color="#0ea5e9", font=ctk.CTkFont(size=12, weight="bold"),
+                      text_color="#082f49").pack(side="right", padx=5)
+
         if not self.image_files:
-            ctk.CTkButton(bottom, text="Cancelar", width=80, command=self._cancel, fg_color="#6b7280", hover_color="#4b5563").pack(side="right")
+            ctk.CTkButton(bottom, text="CANCELAR", width=100, command=self._cancel, 
+                          fg_color="#4b5563", hover_color="#374151", font=ctk.CTkFont(size=12)).pack(side="right")
         else:
-            ctk.CTkButton(bottom, text="Finalizar", width=80, command=self._finish, fg_color="#6b7280", hover_color="#4b5563").pack(side="right")
+            # Botón Finalizar (Cuando ya has terminado todo el lote)
+            ctk.CTkButton(bottom, text="FINALIZAR DATASET", width=150, command=self._finish, 
+                          fg_color="#6366f1", hover_color="#4f46e5", font=ctk.CTkFont(size=12, weight="bold")).pack(side="right")
 
         if self.image_files:
             self._load_current_image()
@@ -202,7 +216,7 @@ class AnnotationWindow(ctk.CTkToplevel):
         self._refresh_class_list()
         self.focus_set()
         if hasattr(self.master, "add_log"):
-            self.master.add_log(f"🏷️ Clases actualizadas: {', '.join(new_classes)}")
+            self.master.add_log(f"Clases actualizadas: {', '.join(new_classes)}")
 
     def _cancel(self):
         """Callback al cerrar sin guardar."""
@@ -284,6 +298,15 @@ class AnnotationWindow(ctk.CTkToplevel):
         self._calculate_scale(self.frame_bgr)
         self.title(f"Anotar: {self.base_name} ({index+1}/{len(self.image_files)})")
         return True
+
+    def _find_first_unlabeled(self):
+        """Encuentra el índice de la primera imagen que no tiene etiquetas guardadas."""
+        for i, path in enumerate(self.image_files):
+            base = os.path.splitext(os.path.basename(path))[0]
+            label_path = os.path.join(self.dataset_dir, "labels", "train", f"{base}.txt")
+            if not os.path.exists(label_path) or os.path.getsize(label_path) == 0:
+                return i
+        return 0 # Si todo está etiquetado, volver al principio
 
     def _load_current_image(self):
         """Actualiza el canvas con la imagen actual y carga sus etiquetas si existen."""
@@ -371,6 +394,27 @@ class AnnotationWindow(ctk.CTkToplevel):
                 os.startfile(target_path)
         except Exception:
             pass
+        
+        if self.on_close_callback:
+            self.on_close_callback()
+        self.destroy()
+
+    def _save_and_exit(self):
+        """Guarda el progreso actual y cierra la sesión."""
+        self._save_internal()
+        if self.on_close_callback:
+            self.on_close_callback()
+        self.destroy()
+
+    def _on_close_x(self):
+        """Manejador para el botón 'X' de la ventana."""
+        if self.boxes:
+            if messagebox.askyesno("Salir", "¿Deseas guardar los cambios antes de salir?", parent=self):
+                self._save_and_exit()
+                return
+        
+        if self.on_close_callback:
+            self.on_close_callback()
         self.destroy()
 
     def _save_internal(self):
@@ -487,7 +531,7 @@ class AddModelPopup(ctk.CTkToplevel):
         self.name_entry.pack(pady=(0, 15), padx=30, fill="x")
 
         self._label("2. Seleccionar archivo de pesos (.pt):")
-        self.file_btn = ctk.CTkButton(self, text="📁 Buscar archivo .pt", command=self._select_file, fg_color="#334155")
+        self.file_btn = ctk.CTkButton(self, text="Buscar archivo .pt", command=self._select_file, fg_color="#334155")
         self.file_btn.pack(pady=(0, 5), padx=30, fill="x")
         self.file_label = ctk.CTkLabel(self, text="Ningún archivo seleccionado", font=ctk.CTkFont(size=10), text_color="#888")
         self.file_label.pack(pady=(0, 15))
@@ -500,7 +544,7 @@ class AddModelPopup(ctk.CTkToplevel):
         self.classes_text.pack(pady=(0, 20), padx=30, fill="x")
         self.classes_text.configure(state="disabled", fg_color="#1a1c1e")
 
-        self.save_btn = ctk.CTkButton(self, text="🚀 Instalar Arquitectura", command=self._save_model, height=40, font=ctk.CTkFont(weight="bold"), fg_color="#16a34a", hover_color="#15803d")
+        self.save_btn = ctk.CTkButton(self, text="Instalar Arquitectura", command=self._save_model, height=40, font=ctk.CTkFont(weight="bold"), fg_color="#16a34a", hover_color="#15803d")
         self.save_btn.pack(pady=20, padx=30, fill="x")
         self.save_btn.configure(state="disabled")
 
@@ -538,12 +582,12 @@ class AddModelPopup(ctk.CTkToplevel):
         self.classes_text.delete("1.0", "end")
         
         is_coco = len(classes) == 80 and "person" in classes and "car" in classes
-        texto = f"✅ {len(classes)} clases encontradas {'(COCO estándar)' if is_coco else '(Personalizadas)'}:\n\n"
+        texto = f"{len(classes)} clases encontradas {'(COCO estandar)' if is_coco else '(Personalizadas)'}:\n\n"
         texto += "\n".join([f"{i}. {c}" for i, c in enumerate(classes)])
         
         self.classes_text.insert("end", texto)
         self.classes_text.configure(state="disabled")
-        self.classes_label.configure(text="Extracción exitosa. El sistema manejará esto por ti.")
+        self.classes_label.configure(text="Extraccion exitosa. El sistema manejara esto por ti.")
         self.save_btn.configure(state="normal")
 
     def _on_extract_error(self, file, error):
@@ -635,14 +679,14 @@ class ClassFilterWindow(ctk.CTkToplevel):
         # Buscar barra de búsqueda (opcional, mejora UX)
         self.search_var = ctk.StringVar()
         self.search_var.trace("w", self._on_search)
-        self.search_entry = ctk.CTkEntry(self, placeholder_text="🔍 Buscar clase...", textvariable=self.search_var)
+        self.search_entry = ctk.CTkEntry(self, placeholder_text="Buscar clase...", textvariable=self.search_var)
         self.search_entry.pack(fill="x", padx=20, pady=(0, 10))
 
         # Checkboxes
         self._build_list()
 
         # Botón Guardar
-        ctk.CTkButton(self, text="✅ Aplicar Filtro", command=self._apply, fg_color="#16a34a", hover_color="#15803d", font=("", 14, "bold"), height=40).pack(fill="x", padx=20, pady=(0, 15))
+        ctk.CTkButton(self, text="Aplicar Filtro", command=self._apply, fg_color="#16a34a", hover_color="#15803d", font=("", 14, "bold"), height=40).pack(fill="x", padx=20, pady=(0, 15))
 
     def _build_list(self, filter_text=""):
         # Limpiar widgets previos de forma segura (sin borrar internos de CTkScrollableFrame)
@@ -842,7 +886,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="GESTIÓN DE FAMILIAS Y MODELOS", font=ctk.CTkFont(size=18, weight="bold"), text_color="#38bdf8").pack(pady=(20, 10))
         
         # Botón superior: Añadir Nueva
-        ctk.CTkButton(self, text="➕ Instalar Nueva Arquitectura (.pt)", command=self._add_new, fg_color="#16a34a", hover_color="#15803d", height=35).pack(pady=10, padx=20, fill="x")
+        ctk.CTkButton(self, text="Instalar Nueva Arquitectura (.pt)", command=self._add_new, fg_color="#16a34a", hover_color="#15803d", height=35).pack(pady=10, padx=20, fill="x")
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True, padx=20, pady=10)
@@ -852,7 +896,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
             accel_frame = ctk.CTkFrame(self, fg_color="#1a1c1e", border_width=1, border_color="#38bdf8")
             accel_frame.pack(fill="x", padx=20, pady=(0, 10))
             
-            ctk.CTkLabel(accel_frame, text="🚀 ACELERACIÓN INTEL DETECTADA", 
+            ctk.CTkLabel(accel_frame, text="ACELERACION INTEL DETECTADA", 
                          font=ctk.CTkFont(size=11, weight="bold"), text_color="#38bdf8").pack(pady=(10, 5))
             
             self.btn_opt = ctk.CTkButton(accel_frame, text="Acelerar Modelo Actual (OpenVINO)", 
@@ -863,7 +907,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
         # Footer informativo
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", side="bottom", pady=15, padx=20)
-        ctk.CTkLabel(footer, text="💡 Recomendación: Mantén una estructura de nombres clara para tus pesos\n(ej: 'yolo11n.pt' para Nano vs 'yolo11l.pt' para Large) para diferenciarlos.",
+        ctk.CTkLabel(footer, text="Recomendacion: Manten una estructura de nombres clara para tus pesos\n(ej: 'yolo11n.pt' para Nano vs 'yolo11l.pt' para Large) para diferenciarlos.",
                      font=("", 10), text_color="#64748b", justify="left").pack(anchor="w")
 
         self._refresh()
@@ -890,10 +934,10 @@ class ModelExplorerWindow(ctk.CTkToplevel):
             lbl_count = ctk.CTkLabel(card, text=f"{len(models)} pesos (.pt)", font=("", 10), text_color="#94a3b8")
             lbl_count.pack(side="left", padx=5)
 
-            ctk.CTkButton(card, text="🗑️", width=30, height=30, fg_color="#7f1d1d", hover_color="#991b1b", 
+            ctk.CTkButton(card, text="X", width=30, height=30, fg_color="#7f1d1d", hover_color="#991b1b", 
                           command=lambda f=fam: self._delete_family(f)).pack(side="right", padx=10)
 
-            ctk.CTkButton(card, text="➕ Pesos", width=80, height=30, fg_color="#334155", hover_color="#475569", 
+            ctk.CTkButton(card, text="+ Pesos", width=80, height=30, fg_color="#334155", hover_color="#475569", 
                           command=lambda f=fam: self._add_weights(f)).pack(side="right", padx=5)
 
     def _add_weights(self, fam_name):
@@ -937,7 +981,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
             messagebox.showinfo("Aviso", "El modelo actual ya está optimizado y funcionando con OpenVINO.")
             return
 
-        self.btn_opt.configure(state="disabled", text="⏳ Optimizando... (Esto puede tardar)")
+        self.btn_opt.configure(state="disabled", text="Optimizando... (Esto puede tardar)")
         self.update()
 
         def run_opt():
@@ -960,7 +1004,7 @@ class SourceSelectorWindow(ctk.CTkToplevel):
         self.parent = parent
         self.on_change = on_change
         self.title("Seleccionar Fuente de Vídeo")
-        win_w, win_h = 500, 450
+        win_w, win_h = 500, 580
         x = (self.winfo_screenwidth() // 2) - (win_w // 2)
         y = (self.winfo_screenheight() // 2) - (win_h // 2)
         self.geometry(f"{win_w}x{win_h}+{x}+{y}")
@@ -970,7 +1014,7 @@ class SourceSelectorWindow(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="CONFIGURAR FUENTE DE ENTRADA", font=ctk.CTkFont(size=18, weight="bold"), text_color="#38bdf8").pack(pady=(25, 20))
 
         # --- OPCIÓN 1: STREAM EN DIRECTO ---
-        self._section_title("🌐 STREAM EN DIRECTO (RTSP, RTMP, HLS)")
+        self._section_title("STREAM EN DIRECTO (RTSP, RTMP, HLS)")
         live_frame = ctk.CTkFrame(self, fg_color="transparent")
         live_frame.pack(fill="x", padx=40, pady=(0, 15))
         
@@ -981,7 +1025,7 @@ class SourceSelectorWindow(ctk.CTkToplevel):
                       command=lambda: self._apply(self.live_entry.get())).pack(side="right")
 
         # --- OPCIÓN 2: VÍDEO REDIFERIDO / VOD ---
-        self._section_title("📺 VÍDEO REDIFERIDO (YouTube, Vimeo, MP4 URL)")
+        self._section_title("VIDEO REDIFERIDO (YouTube, Vimeo, MP4 URL)")
         vod_frame = ctk.CTkFrame(self, fg_color="transparent")
         vod_frame.pack(fill="x", padx=40, pady=(0, 15))
         
@@ -992,9 +1036,25 @@ class SourceSelectorWindow(ctk.CTkToplevel):
                       command=lambda: self._apply(self.vod_entry.get())).pack(side="right")
 
         # --- OPCIÓN 3: ARCHIVO LOCAL ---
-        self._section_title("📂 ARCHIVO LOCAL")
+        self._section_title("ARCHIVO LOCAL")
         ctk.CTkButton(self, text="Seleccionar Archivo de Vídeo", height=35, fg_color="#334155", hover_color="#475569",
-                      command=self._browse_local).pack(fill="x", padx=40, pady=(0, 20))
+                      command=self._browse_local).pack(fill="x", padx=40, pady=(0, 15))
+
+        # --- OPCIÓN 4: CÁMARAS LOCALES ---
+        self._section_title("CAMARAS LOCALES (USB / INTEGRADA)")
+        cam_frame = ctk.CTkFrame(self, fg_color="transparent")
+        cam_frame.pack(fill="x", padx=40, pady=(0, 20))
+        
+        self.cam_combo = ctk.CTkComboBox(cam_frame, values=["Presiona Escanear..."], state="readonly", height=32)
+        self.cam_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.cam_combo.set("Escanear camaras...")
+        
+        btn_scan = ctk.CTkButton(cam_frame, text="Escanear", width=70, height=32, fg_color="#334155", hover_color="#475569",
+                                 command=self._scan_cameras)
+        btn_scan.pack(side="left", padx=(0, 8))
+        
+        ctk.CTkButton(cam_frame, text="Cargar", width=70, height=32, fg_color="#1e293b", hover_color="#334155", text_color="#38bdf8",
+                      command=self._apply_camera).pack(side="right")
 
         # Pre-rellenar si es URL
         if current_url.startswith(("http", "rtsp", "rtmp")):
@@ -1018,7 +1078,7 @@ class SourceSelectorWindow(ctk.CTkToplevel):
                     favs.append({"name": name, "url": url.strip()})
                     save_favorites(favs)
                     if hasattr(self.parent, "add_log"):
-                        self.parent.add_log(f"⭐ Fuente guardada en favoritos: {name}")
+                        self.parent.add_log(f"Fuente guardada en favoritos: {name}")
                     self.on_change(url.strip())
                     self.destroy()
                 CaptureNamePopup(self, on_name, title="Guardar Favorito", prompt="Nombre para esta fuente:")
@@ -1031,6 +1091,38 @@ class SourceSelectorWindow(ctk.CTkToplevel):
         if path:
             self._apply(path) # Usar _apply para permitir guardarlo en favoritos
 
+    def _scan_cameras(self):
+        self.cam_combo.set("Buscando...")
+        self.update()
+        
+        def run_scan():
+            import cv2
+            import threading
+            available = []
+            for i in range(5):
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+                if cap.isOpened():
+                    available.append(f"Camara {i}")
+                    cap.release()
+            
+            def _update():
+                if available:
+                    self.cam_combo.configure(values=available)
+                    self.cam_combo.set(available[0])
+                else:
+                    self.cam_combo.configure(values=["No encontradas"])
+                    self.cam_combo.set("No encontradas")
+            self.after(0, _update)
+            
+        import threading
+        threading.Thread(target=run_scan, daemon=True).start()
+
+    def _apply_camera(self):
+        val = self.cam_combo.get()
+        if "Camara" in val:
+            idx = val.split(" ")[1]
+            self._apply(idx)
+
 class FavoritesWindow(ctk.CTkToplevel):
     """Ventana para gestionar y seleccionar fuentes favoritas."""
     def __init__(self, parent, on_select):
@@ -1040,7 +1132,7 @@ class FavoritesWindow(ctk.CTkToplevel):
         self.geometry("450x500")
         self.grab_set()
         
-        ctk.CTkLabel(self, text="⭐ FUENTES FAVORITAS", font=ctk.CTkFont(size=16, weight="bold"), text_color="#38bdf8").pack(pady=20)
+        ctk.CTkLabel(self, text="FUENTES FAVORITAS", font=ctk.CTkFont(size=16, weight="bold"), text_color="#38bdf8").pack(pady=20)
         
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True, padx=20, pady=10)
@@ -1094,12 +1186,12 @@ class FavoritesWindow(ctk.CTkToplevel):
             favs.pop(idx)
             save_favorites(favs)
             if hasattr(self.master, "add_log"):
-                self.master.add_log(f"🗑️ Favorito eliminado: {name}")
+                self.master.add_log(f"Favorito eliminado: {name}")
             self._refresh()
 
     def _apply(self, url):
         if hasattr(self.master, "add_log"):
-            self.master.add_log(f"📂 Cargando favorito: {url[:50]}...")
+            self.master.add_log(f"Cargando favorito: {url[:50]}...")
         self.on_select(url)
         self.destroy()
 

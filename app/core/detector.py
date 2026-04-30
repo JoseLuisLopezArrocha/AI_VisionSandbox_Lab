@@ -218,6 +218,11 @@ class ObjectDetector:
                 "verbose": False,
                 "device": target_device
             }
+            
+            if target_classes is not None:
+                if len(target_classes) == 0:
+                    return frame, []
+                kwargs["classes"] = target_classes
                 
             results = self.model.track(frame, **kwargs)
             detections = []

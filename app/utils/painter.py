@@ -6,12 +6,15 @@ from .helpers import ZONE_COLORS
 
 class VisualPainter:
     """
-    Motor Gráfico y Telemétrico.
+    Motor Grafico y Telemetrico.
     
-    Centraliza todas las operaciones de pintado sobre el frame de vídeo y la 
-    actualización de métricas en los lienzos (canvas) del Dashboard.
-    Aísla la lógica de visualización del motor de detección.
+    Centraliza todas las operaciones de pintado sobre el frame de video y la 
+    actualizacion de metricas en los lienzos (canvas) del Dashboard.
+    Aisla la logica de visualizacion del motor de deteccion.
     """
+
+    _track_history: dict = {}
+    _cleanup_cnt: dict = {}
 
     @staticmethod
     def draw_zones(frame, zones, detections):
@@ -226,8 +229,13 @@ class VisualPainter:
             else:
                 app.target_classes = [cid]
                 app.add_log(f"Filtrando solo clase: {labels_map[cid].upper()}")
+            
+            # Notificar a la app para guardar config y limpiar frames
+            if hasattr(app, '_on_filter_applied'):
+                app._on_filter_applied(app.target_classes)
+            
             # Forzar redibujado inmediato tras clic
-            VisualPainter.draw_bar_chart(app, canvas, filtered_detections)
+            VisualPainter.draw_bar_chart(app, canvas, detections)
 
         # Vincular evento general una sola vez (Tkinter find_withtag es más robusto)
         canvas.tag_bind("bar_obj", "<Button-1>", lambda e: None) # Placeholder

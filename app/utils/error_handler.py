@@ -38,4 +38,4 @@ def get_error_msg(code: str, details: Optional[str] = None) -> str:
 
 def log_error(code: str, details: Optional[str] = None) -> None:
     """Imprime el error en consola (extensible a logs de archivo)."""
-    print(f"❌ {get_error_msg(code, details)}")
+    print(f"[ERROR] {get_error_msg(code, details)}")

@@ -38,7 +38,13 @@ class VisionEngine:
             self.is_live = False
             target_source = source
 
-            if self.is_stream:
+            if source.isdigit():
+                self.is_live = True
+                self.is_stream = False
+                self.cap = cv2.VideoCapture(int(source))
+                if not self.cap.isOpened():
+                    log_error("EXE-COR-CONN-02", f"No se pudo abrir la camara {source}")
+            elif self.is_stream:
                 if "youtube.com" in source or "youtu.be" in source:
                     try:
                         # Para YouTube siempre usamos CamGear ya que gestiona mucho mejor el buffering que VideoCapture
