@@ -117,7 +117,7 @@ class VisionApp(ctk.CTk):
     def _load_icons(self):
         """Carga los iconos locales en memoria."""
         self.icons = {}
-        icon_names = ['source', 'favs', 'alerts', 'settings', 'night', 'day', 'info', 'play', 'pause', 'back', 'forward']
+        icon_names = ['source', 'favs', 'alerts', 'settings', 'night', 'day', 'info', 'play', 'pause', 'back', 'forward', 'models']
         for name in icon_names:
             p_light = os.path.join('assets', 'icons', f'{name}_dark.png')
             p_dark = os.path.join('assets', 'icons', f'{name}.png')
@@ -174,7 +174,7 @@ class VisionApp(ctk.CTk):
         header_frame = ctk.CTkFrame(self.sidebar, fg_color='transparent', height=10, corner_radius=0)
         header_frame.pack(pady=(5, 5), padx=20, fill='x')
         self._section('MODELO IA')
-        ctk.CTkButton(self.sidebar, text=' 📂 EXPLORADOR DE INTELIGENCIA', command=lambda: ModelExplorerWindow(self, self.detector), height=34, fg_color='#3b82f6', hover_color='#2563eb', text_color='#ffffff', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(0, 10), padx=20, fill='x')
+        ctk.CTkButton(self.sidebar, text=' EXPLORADOR DE INTELIGENCIA', image=self.icons.get('models'), command=lambda: ModelExplorerWindow(self, self.detector), height=34, fg_color='#3b82f6', hover_color='#2563eb', text_color='#ffffff', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(0, 10), padx=20, fill='x')
         self.no_model_selector = ctk.CTkSegmentedButton(self.sidebar, values=['DESACTIVAR PROCESAMIENTO IA'], command=lambda _: self._on_no_model_click(), height=30, fg_color='#1e293b', selected_color='#10b981', corner_radius=0)
         self.no_model_selector.pack(pady=(0, 8), padx=20, fill='x')
         families = list(self.detector.architectures.keys())
