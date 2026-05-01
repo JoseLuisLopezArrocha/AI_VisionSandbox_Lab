@@ -719,7 +719,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
         self.geometry(f'{win_w}x{win_h}+{x}+{y}')
         self.grab_set()
         ctk.CTkLabel(self, text='GESTIÓN DE FAMILIAS Y MODELOS', font=ctk.CTkFont(size=18, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(pady=(20, 10))
-        ctk.CTkButton(self, text='Instalar Nueva Arquitectura (.pt)', command=self._add_new, fg_color='#16a34a', hover_color='#15803d', height=35, corner_radius=0).pack(pady=10, padx=20, fill='x')
+        ctk.CTkButton(self, text='NUEVA ARQUITECTURA', command=self._add_new, fg_color='#16a34a', hover_color='#15803d', height=35, corner_radius=0).pack(pady=10, padx=20, fill='x')
         self.scroll = ctk.CTkScrollableFrame(self, fg_color='transparent', corner_radius=0)
         self.scroll.pack(fill='both', expand=True, padx=20, pady=10)
         if 'openvino' in self.detector.hardware_diag['best_backend']:
@@ -770,7 +770,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
                 messagebox.showerror('Error', f'No se pudo copiar el archivo: {e}')
 
     def _add_new(self):
-        AddModelPopup(self.detector, self._refresh)
+        AddModelPopup(self, self.detector, self._refresh)
 
     def _delete_family(self, name):
         if messagebox.askyesno('Confirmar Borrado', f"¿Estás seguro de eliminar la familia '{name}'?\nEsto borrará todos los modelos internos definitivamente."):
