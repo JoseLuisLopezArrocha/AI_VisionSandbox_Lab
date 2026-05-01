@@ -20,6 +20,7 @@ class VisionEngine:
         self.cap: Optional[cv2.VideoCapture] = None
         self.is_stream: bool = False
         self.is_live: bool = False
+        self.is_camera: bool = False
         
         # Hilo de lectura para fuentes no CamGear
         self._frame: Optional[np.ndarray] = None
@@ -41,9 +42,29 @@ class VisionEngine:
             if source.isdigit():
                 self.is_live = True
                 self.is_stream = False
-                self.cap = cv2.VideoCapture(int(source))
-                if not self.cap.isOpened():
-                    log_error("EXE-COR-CONN-02", f"No se pudo abrir la camara {source}")
+                self.is_camera = True
+                cam_idx = int(source)
+                
+                # MSMF es el estándar moderno en Windows y suele ser más robusto para permisos
+                backends = [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY] if os.name == 'nt' else [cv2.CAP_ANY]
+                
+                for backend in backends:
+                    self.cap = cv2.VideoCapture(cam_idx, backend)
+                    if self.cap.isOpened():
+                        # Eliminamos la resolución forzada porque causaba error MF_E_INVALIDMEDIATYPE (-1072875772)
+                        
+                        # Prueba de lectura crítica
+                        for _ in range(3):
+                            ret, frame = self.cap.read()
+                            if ret: 
+                                self._frame = frame
+                                break
+                            time.sleep(0.05)
+                        if ret: break
+                        else: self.cap.release()
+                
+                if not self.cap or not self.cap.isOpened():
+                    log_error("EXE-COR-CONN-02", f"Fallo total al abrir cámara {source}. Revisa permisos de Windows.")
             elif self.is_stream:
                 if "youtube.com" in source or "youtu.be" in source:
                     try:
@@ -86,7 +107,8 @@ class VisionEngine:
                     with self._read_lock:
                         self._frame = frame
                 else:
-                    time.sleep(0.01) # Pequeña espera si falla lectura
+                    log_error("EXE-COR-CONN-01", "Fallo de lectura en hilo _reader. Reintentando...")
+                    time.sleep(0.1) # Mayor espera si falla lectura
             else:
                 break
             time.sleep(0.001)
