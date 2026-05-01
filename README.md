@@ -60,7 +60,7 @@
 
 ## Requisitos Previos
 
-- **Python 3.10+** (se recomienda 3.11)
+- **Python 3.10 a 3.12** (se recomienda **3.12** para máximo rendimiento)
 - **GPU NVIDIA** con CUDA (opcional, mejora rendimiento x10)
 - **Conexion a Internet** para streams de YouTube y APIs externas
 

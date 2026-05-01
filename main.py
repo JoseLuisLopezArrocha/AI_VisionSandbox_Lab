@@ -6,6 +6,13 @@ Inicia la aplicación desde el paquete profesional 'app'.
 import sys
 import traceback
 
+def check_python_version():
+    """Verifica que la versión de Python sea compatible."""
+    if sys.version_info < (3, 10):
+        print("ERROR: Se requiere Python 3.10 o superior.")
+        print(f"Versión detectada: {sys.version}")
+        sys.exit(1)
+
 def main():
     """Inicializa y arranca la aplicación principal."""
     try:
@@ -46,4 +53,5 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    check_python_version()
     main()
