@@ -343,7 +343,7 @@ class VisionApp(ctk.CTk):
         if self.detector.model and (not self.is_inferencing) and (not self.is_loading_model) and should_infer:
             self.last_infer_time = now
             threading.Thread(target=self.run_inference, args=(self.raw_frame.copy(),), daemon=True).start()
-        has_layers = bool(self.zones or self.heatmap_enabled)
+        has_layers = bool(self.zones or self.heatmap_enabled or self.is_drawing_zone)
         if self.detector.model is None:
             display = self.raw_frame.copy() if has_layers else self.raw_frame
             self.annotated_frame = None
@@ -532,11 +532,12 @@ class VisionApp(ctk.CTk):
             url_text = url_text[:42] + '...'
         self.live_url_label.configure(text=f'|  {url_text}')
         is_camera = getattr(self.engine, 'is_camera', False)
+        is_stream = getattr(self.engine, 'is_stream', False)
         if is_camera:
             mode_desc = 'Cámara Local'
         else:
             mode_desc = 'Streaming LIVE' if is_live else 'YouTube VOD' if is_stream else 'Video Local'
-        self.add_log(f'Modo {mode_desc} detectado. UI actualizada.')
+        self.add_log(f'Fuente: {mode_desc} detectada. UI actualizada.')
 
     def _blink_live_indicator(self):
         """Efecto de parpadeo para el punto rojo del indicador."""
@@ -687,8 +688,25 @@ class VisionApp(ctk.CTk):
         SettingsWindow(self, self.event_engine, self.detector)
 
     def toggle_zone_drawing(self):
-        self.is_drawing_zone = not self.is_drawing_zone
-        self.draw_btn.configure(text='Listo' if self.is_drawing_zone else 'Dibujar')
+        """Alterna el modo de dibujo de zonas y gestiona el guardado al finalizar."""
+        if self.is_drawing_zone:
+            # Finalizar dibujo: Intentar guardar si hay suficientes puntos
+            if len(self.current_zone) >= 3:
+                self.zones.append(self.current_zone)
+                self.add_log(f"Zona {len(self.zones)} delimitada con éxito.")
+                self._save_config()
+                self._update_bar_mode_buttons()
+            elif self.current_zone:
+                self.add_log("Dibujo cancelado: se requieren al menos 3 puntos.")
+            
+            self.current_zone = []
+            self.is_drawing_zone = False
+            self.draw_btn.configure(text='DELIMITAR ZONAS', fg_color='#1e293b')
+        else:
+            # Iniciar dibujo
+            self.is_drawing_zone = True
+            self.draw_btn.configure(text='LISTO (GUARDAR)', fg_color='#059669')
+            self.add_log("Modo dibujo: Haz clic en el video para marcar puntos. Clic derecho o botón 'Listo' para terminar.")
 
     def clear_zones(self):
         self.zones = []
@@ -731,12 +749,9 @@ class VisionApp(ctk.CTk):
             print(f'Error detectando objeto por clic: {_e}')
 
     def _on_video_right_click(self, e):
-        if self.is_drawing_zone and len(self.current_zone) >= 3:
-            self.zones.append(self.current_zone)
-            self.current_zone = []
+        if self.is_drawing_zone:
+            # Delegar la lógica de guardado y cambio de UI al método centralizado
             self.toggle_zone_drawing()
-            self._save_config()
-            self._update_bar_mode_buttons()
 
     def _on_conf_change(self, value):
         self.conf_threshold = value

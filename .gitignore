@@ -30,3 +30,9 @@ models/*
 # IDEs
 .vscode/
 .idea/
+
+# Carpetas de desarrollo y temporales
+scratch/
+.agents/
+temp/
+tmp/
