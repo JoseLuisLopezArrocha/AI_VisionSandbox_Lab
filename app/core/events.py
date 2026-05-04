@@ -99,7 +99,7 @@ class EventEngine:
             return not bool(det_zones.intersection(target_zones))
         return True
 
-    def evaluate(self, detections, frame=None, app_log_callback=None, evidence_callback=None):
+    def evaluate(self, detections, frame=None, source="", app_log_callback=None, evidence_callback=None):
         """
         Evalua reglas en tiempo real sobre la rafaga de detecciones actual.
         - detections: Lista de objetos detectados en el frame actual.
@@ -130,7 +130,7 @@ class EventEngine:
                 
                 time_active = now - self.active_conditions_start[rule['id']]
                 if time_active >= rule.get('persistence', 0):
-                    self._trigger_action(rule, count, frame, app_log_callback, evidence_callback)
+                    self._trigger_action(rule, count, frame, source, app_log_callback, evidence_callback)
                     self.last_triggered[rule['id']] = now
             else:
                 if rule['id'] in self.active_conditions_start:
@@ -140,7 +140,7 @@ class EventEngine:
         if detections:
             self.db.log_detections(detections)
 
-    def _trigger_action(self, rule, current_count, frame, app_log_callback, evidence_callback):
+    def _trigger_action(self, rule, current_count, frame, source, app_log_callback, evidence_callback):
         """Orquesta la respuesta al hito: logs, validacion IA y alertas externas."""
         targets = rule.get('zone_targets', [-1])
         if not targets or -1 in targets:
@@ -159,7 +159,7 @@ class EventEngine:
         
         if provider == "None":
             # Sin validacion secundaria: disparar alertas directamente
-            self._send_external_alerts(rule, msg, frame)
+            self._send_external_alerts(rule, msg, frame, source, current_count)
         elif frame is not None:
             # Enriquecer val_config con los datos de conexion del engine
             enriched_config = {**val_config}
@@ -170,9 +170,9 @@ class EventEngine:
             
             # Validacion via VLM (Asincrona)
             SecondaryValidator.validate_async(frame, enriched_config, rule["name"], app_log_callback, 
-                                            lambda img, m, ok: self._send_external_alerts(rule, m, img) if ok else None)
+                                            lambda img, m, ok: self._send_external_alerts(rule, m, img, source, current_count) if ok else None)
 
-    def _send_external_alerts(self, rule, msg, frame=None):
+    def _send_external_alerts(self, rule, msg, frame=None, source="", count=0):
         """Gestiona el envio de evidencias, logs a SQLite, alertas Telegram/Webhooks y TTS."""
         actions = rule.get('actions', [rule.get('action', 'log')])
         severity = rule.get('severity', 'Info')
@@ -194,9 +194,19 @@ class EventEngine:
         if "tts" in actions or "all" in actions:
             self._speak(msg)
 
-        # 4. Webhook
+        # 4. Webhook Enriquecido
         if ("webhook" in actions or "all" in actions) and self.config["webhook_url"]:
-            threading.Thread(target=lambda: requests.post(self.config["webhook_url"], json={"msg": msg, "severity": severity}), daemon=True).start()
+            payload = {
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+                "rule_name": rule['name'],
+                "severity": severity,
+                "message": msg,
+                "source": source,
+                "class": rule['class_target'],
+                "count": count,
+                "zone_targets": rule.get('zone_targets', [-1])
+            }
+            threading.Thread(target=lambda: requests.post(self.config["webhook_url"], json=payload, timeout=10), daemon=True).start()
         
         # 5. Telegram (con foto si hay evidencia)
         if ("telegram" in actions or "all" in actions) and self.config["telegram_token"]:
@@ -272,6 +282,52 @@ class EventEngine:
         self.config["huggingface_api_key"] = huggingface_api_key
         self.config["huggingface_model"] = huggingface_model
         self.save_rules()
+
+    def test_webhook(self, url, severity="Info"):
+        """Envía un webhook de prueba enriquecido para validación externa."""
+        if not url: return False, "URL vacía"
+        payload = {
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+            "rule_name": "TEST_SISTEMA",
+            "severity": severity,
+            "message": f"PRUEBA DE CONEXIÓN: Webhook configurado correctamente con gravedad '{severity}'.",
+            "source": "VISION_APP_INTERNAL",
+            "class": "test_signal",
+            "count": 1,
+            "zone_targets": [0]
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            return resp.status_code == 200, resp.text
+        except Exception as e:
+            return False, str(e)
+
+    def test_telegram(self, token, chat_id):
+        """Envía un mensaje de prueba a Telegram."""
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        try:
+            resp = requests.post(url, data={"chat_id": chat_id, "text": "PRUEBA DE CONEXIÓN: Tu bot de Vision App está configurado correctamente."}, timeout=10)
+            return resp.status_code == 200, resp.text
+        except Exception as e:
+            return False, str(e)
+
+    def test_vlm(self, provider, frame, class_name, log_callback, config_override=None):
+        """Lanza una validación de prueba usando el proveedor VLM configurado (o override)."""
+        if frame is None:
+            return False, "No hay vídeo activo para capturar frame de prueba."
+        
+        config = self.config.copy()
+        if config_override:
+            config.update(config_override)
+            
+        config["provider"] = provider
+        config["prompt"] = class_name
+        
+        if log_callback:
+            log_callback(f"IA: Lanzando prueba de visión ({provider}) para clase '{class_name}'...")
+        
+        SecondaryValidator.validate_async(frame, config, "TEST_VISUAL", log_callback)
+        return True, "Enviado"
 
     # --- Estadisticas Acumulativas ---
 

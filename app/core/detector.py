@@ -232,8 +232,9 @@ class ObjectDetector:
                 annotated = result.plot()
                 for box in result.boxes:
                     cls_id = int(box.cls[0])
-                    # No filtramos aquí para que el HUD pueda hacer Focus en cualquier objeto visible
-                    label = self.model.names.get(cls_id, f"Clase {cls_id}")
+                    # Protección contra acceso a names durante recargas de modelo
+                    names = getattr(self.model, 'names', {})
+                    label = names.get(cls_id, f"Clase {cls_id}")
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                     zone_indices = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)

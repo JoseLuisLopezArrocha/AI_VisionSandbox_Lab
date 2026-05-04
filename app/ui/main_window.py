@@ -480,7 +480,7 @@ class VisionApp(ctk.CTk):
 
             def on_evidence(img, msg, ok):
                 self.after(0, lambda: self.add_evidence(img, msg, ok))
-            self.event_engine.evaluate(detections, frame=frame, app_log_callback=self.add_log, evidence_callback=on_evidence)
+            self.event_engine.evaluate(detections, frame=frame, source=self.url, app_log_callback=self.add_log, evidence_callback=on_evidence)
             ms = int((time.time() - t_infer) * 1000)
             self.after(0, lambda: self.infer_label.configure(text=f'INFERENCIA: {ms} ms'))
         finally:

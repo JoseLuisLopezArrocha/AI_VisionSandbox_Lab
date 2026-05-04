@@ -16,6 +16,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def __init__(self, parent, event_engine, detector):
         super().__init__(parent)
+        self.parent = parent
         self.engine = event_engine
         self.detector = detector
         self.title('Ajustes de Sistema')
@@ -31,6 +32,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self.entry_wh = ctk.CTkEntry(wh_frame, placeholder_text='https://hooks.example.com/...', corner_radius=0)
         self.entry_wh.insert(0, self.engine.config.get('webhook_url', ''))
         self.entry_wh.pack(pady=(2, 10), padx=10, fill='x')
+        
+        wh_test_row = ctk.CTkFrame(wh_frame, fg_color='transparent', corner_radius=0)
+        wh_test_row.pack(fill='x', padx=10, pady=(0, 10))
+        self.wh_sev_var = ctk.StringVar(value="Info")
+        self.wh_sev_menu = ctk.CTkOptionMenu(wh_test_row, values=["Info", "Alert", "Critical"], variable=self.wh_sev_var, width=100, height=28, corner_radius=0)
+        self.wh_sev_menu.pack(side='left', padx=(0, 10))
+        ctk.CTkButton(wh_test_row, text='PROBAR WEBHOOK', command=self._test_webhook, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=10, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True)
         self._section_header(self.scroll, 'TELEGRAM')
         tg_frame = ctk.CTkFrame(self.scroll, corner_radius=0)
         tg_frame.pack(fill='x', pady=(0, 10))
@@ -38,11 +46,17 @@ class SettingsWindow(ctk.CTkToplevel):
         self.entry_tg = ctk.CTkEntry(tg_frame, show='*', corner_radius=0)
         self.entry_tg.insert(0, self.engine.config.get('telegram_token', ''))
         self.entry_tg.pack(pady=2, padx=10, fill='x')
-        ctk.CTkLabel(tg_frame, text='Chat ID:', corner_radius=0).pack(pady=2, padx=10, anchor='w')
         self.entry_id = ctk.CTkEntry(tg_frame, corner_radius=0)
         self.entry_id.insert(0, self.engine.config.get('telegram_chat_id', ''))
-        self.entry_id.pack(pady=(2, 10), padx=10, fill='x')
+        self.entry_id.pack(pady=2, padx=10, fill='x')
+        ctk.CTkButton(tg_frame, text='PROBAR TELEGRAM', command=self._test_telegram, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=10, weight='bold'), height=28, corner_radius=0).pack(pady=(2, 10), padx=10, fill='x')
         self._section_header(self.scroll, 'PROVEEDORES DE IA (Validacion Secundaria)')
+        test_vlm_frame = ctk.CTkFrame(self.scroll, fg_color='#1e293b', corner_radius=0)
+        test_vlm_frame.pack(fill='x', pady=(0, 10))
+        ctk.CTkLabel(test_vlm_frame, text='Clase para Test de Visión:', font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', padx=10, pady=5)
+        self.entry_vlm_test = ctk.CTkEntry(test_vlm_frame, placeholder_text='ej: person', width=120, height=24, corner_radius=0)
+        self.entry_vlm_test.insert(0, 'person')
+        self.entry_vlm_test.pack(side='left', padx=5, pady=5)
         ollama_frame = ctk.CTkFrame(self.scroll, corner_radius=0)
         ollama_frame.pack(fill='x', pady=(0, 5))
         ctk.CTkLabel(ollama_frame, text='OLLAMA', font=ctk.CTkFont(size=11, weight='bold'), text_color='#a78bfa', corner_radius=0).pack(pady=(10, 2), padx=10, anchor='w')
@@ -58,7 +72,10 @@ class SettingsWindow(ctk.CTkToplevel):
         self.entry_ollama_model.pack(pady=2, padx=10, fill='x')
         self.ollama_status = ctk.CTkLabel(ollama_frame, text='Pulsa Enter o sal de la URL para cargar modelos.', font=ctk.CTkFont(size=10), text_color='#64748b', corner_radius=0)
         self.ollama_status.pack(pady=2, padx=10, anchor='w')
-        ctk.CTkButton(ollama_frame, text='\ue72c SINCRONIZAR MODELOS', command=self._test_ollama, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=10, weight='bold'), height=28, corner_radius=0).pack(pady=(2, 10), padx=10, fill='x')
+        ollama_btns = ctk.CTkFrame(ollama_frame, fg_color='transparent', corner_radius=0)
+        ollama_btns.pack(fill='x', padx=10, pady=(2, 10))
+        ctk.CTkButton(ollama_btns, text='\ue72c MODELOS', command=self._test_ollama, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True, padx=(0, 5))
+        ctk.CTkButton(ollama_btns, text='\ue7b3 TEST VISIÓN', command=lambda: self._test_vlm('ollama'), fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True)
         hf_frame = ctk.CTkFrame(self.scroll, corner_radius=0)
         hf_frame.pack(fill='x', pady=(0, 10))
         ctk.CTkLabel(hf_frame, text='HUGGINGFACE', font=ctk.CTkFont(size=11, weight='bold'), text_color='#fbbf24', corner_radius=0).pack(pady=(10, 2), padx=10, anchor='w')
@@ -72,7 +89,10 @@ class SettingsWindow(ctk.CTkToplevel):
         self.entry_hf_model.pack(pady=2, padx=10, fill='x')
         self.hf_status = ctk.CTkLabel(hf_frame, text='', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0)
         self.hf_status.pack(pady=2, padx=10, anchor='w')
-        ctk.CTkButton(hf_frame, text='Test de Conexion', command=self._test_huggingface, fg_color='#334155', hover_color='#475569', height=28, corner_radius=0).pack(pady=(2, 10), padx=10, fill='x')
+        hf_btns = ctk.CTkFrame(hf_frame, fg_color='transparent', corner_radius=0)
+        hf_btns.pack(fill='x', padx=10, pady=(2, 10))
+        ctk.CTkButton(hf_btns, text='CONEXIÓN', command=self._test_huggingface, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True, padx=(0, 5))
+        ctk.CTkButton(hf_btns, text='TEST VISIÓN', command=lambda: self._test_vlm('huggingface'), fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True)
         btn_frame = ctk.CTkFrame(self, fg_color='transparent', corner_radius=0)
         btn_frame.pack(fill='x', padx=15, pady=10)
         ctk.CTkButton(btn_frame, text='GUARDAR CONFIGURACIÓN', command=self._save, fg_color='#10b981', hover_color='#059669', font=ctk.CTkFont(size=12, weight='bold'), corner_radius=0).pack(fill='x', pady=0)
@@ -99,7 +119,8 @@ class SettingsWindow(ctk.CTkToplevel):
             hf_key = self.entry_hf_key.get().strip()
             hf_model = self.entry_hf_model.get().strip()
             self.engine.update_config(webhook_url=wh_url, telegram_token=tg_token, telegram_chat_id=tg_id, ollama_url=ollama_url, ollama_model=ollama_model, huggingface_api_key=hf_key, huggingface_model=hf_model)
-            messagebox.showinfo('Correcto', 'Configuracion guardada correctamente.')
+            if hasattr(self.parent, 'add_log'):
+                self.parent.add_log('Ajustes: Configuración guardada correctamente.')
             self.destroy()
         except Exception as e:
             log_error('EXE-GUI-COMP-02', f'Error guardando settings: {e}')
@@ -115,7 +136,8 @@ class SettingsWindow(ctk.CTkToplevel):
             self.entry_hf_key.delete(0, 'end')
             self.entry_hf_model.delete(0, 'end')
             self.engine.update_config('', '', '', '', '', '', '')
-            messagebox.showinfo('Correcto', 'Credenciales eliminadas.')
+            if hasattr(self.parent, 'add_log'):
+                self.parent.add_log('Ajustes: Credenciales eliminadas por el usuario.')
 
     def _test_ollama(self):
         """Realiza un health check al endpoint de Ollama y descarga la lista de modelos filtrada."""
@@ -142,6 +164,65 @@ class SettingsWindow(ctk.CTkToplevel):
                     self.ollama_status.configure(text='Conectado, pero no hay modelos instalados.', text_color='#fbbf24')
             self.after(0, _update_ui)
         threading.Thread(target=check, daemon=True).start()
+
+    def _test_webhook(self):
+        """Envía una señal de prueba al webhook configurado y notifica vía log."""
+        url = self.entry_wh.get().strip()
+        sev = self.wh_sev_var.get()
+        if not url:
+            if hasattr(self.parent, 'add_log'):
+                self.parent.add_log('Webhooks: Error - No hay URL configurada.')
+            return
+        
+        if hasattr(self.parent, 'add_log'):
+            self.parent.add_log(f'Webhooks: Enviando señal de prueba ({sev})...')
+        
+        def run_test():
+            success, detail = self.engine.test_webhook(url, sev)
+            if hasattr(self.parent, 'add_log'):
+                if success:
+                    self.parent.add_log(f'Webhooks: TEST EXITOSO (HTTP 200). Gravedad: {sev}')
+                else:
+                    self.parent.add_log(f'Webhooks: ERROR en el envío -> {detail[:60]}...')
+        
+        threading.Thread(target=run_test, daemon=True).start()
+
+    def _test_telegram(self):
+        """Envía un mensaje de prueba a Telegram."""
+        token = self.entry_tg.get().strip()
+        chat_id = self.entry_id.get().strip()
+        if not token or not chat_id:
+            if hasattr(self.parent, 'add_log'): self.parent.add_log('Telegram: Error - Faltan credenciales.')
+            return
+        if hasattr(self.parent, 'add_log'): self.parent.add_log('Telegram: Enviando mensaje de prueba...')
+        def run():
+            ok, detail = self.engine.test_telegram(token, chat_id)
+            if hasattr(self.parent, 'add_log'):
+                if ok: self.parent.add_log('Telegram: TEST EXITOSO (Mensaje enviado).')
+                else: self.parent.add_log(f'Telegram: ERROR -> {detail[:60]}...')
+        threading.Thread(target=run, daemon=True).start()
+
+    def _test_vlm(self, provider):
+        """Lanza una validación asíncrona usando los valores actuales de la UI."""
+        class_name = self.entry_vlm_test.get().strip()
+        frame = getattr(self.parent, 'raw_frame', None)
+        
+        # Capturar valores actuales de la UI para probar sin necesidad de guardar
+        config_override = {}
+        if provider == 'ollama':
+            config_override = {
+                "ollama_url": self.entry_ollama_url.get().strip(),
+                "ollama_model": self.entry_ollama_model.get().strip()
+            }
+        elif provider == 'huggingface':
+            config_override = {
+                "huggingface_api_key": self.entry_hf_key.get().strip(),
+                "huggingface_model": self.entry_hf_model.get().strip()
+            }
+
+        if hasattr(self.parent, 'add_log'):
+            ok, msg = self.engine.test_vlm(provider, frame, class_name, self.parent.add_log, config_override)
+            if not ok: self.parent.add_log(f'IA: Error de inicio -> {msg}')
 
     def _test_huggingface(self):
         """Verifica la API Key de HuggingFace con un whoami."""
