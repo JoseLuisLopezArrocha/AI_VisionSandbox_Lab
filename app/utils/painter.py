@@ -108,16 +108,34 @@ class VisualPainter:
             if should_update_text:
                 app._last_metrics_update = now
                 
+                # Lógica de Cambio de Contexto (Zonas vs General)
+                mode = getattr(app, 'bar_chart_mode', 'General')
+                
+                if mode == "General":
+                    total_ever = app.total_detections_ever
+                    breakdown_source = app.session_class_counts
+                    total_now = len(detections)
+                else:
+                    try:
+                        zi = int(mode[1:]) - 1
+                        z_data = app.session_zone_data.get(zi, {"ids": set(), "counts": Counter()})
+                        total_ever = len(z_data["ids"])
+                        breakdown_source = z_data["counts"]
+                        total_now = sum(1 for d in detections if zi in d.get("zone_indices", []))
+                    except:
+                        total_ever = 0
+                        breakdown_source = Counter()
+                        total_now = 0
+
                 # Tiempo de proceso total (Render)
                 elapsed = int((time.time() - t0) * 1000)
                 if hasattr(app, 'infer_label'):
                     app.infer_label.configure(text=f"PROCESO: {elapsed} ms")
                 
-                # Conteo total
-                total = len(detections)
-                app.count_label.configure(text=f"OBJETOS: {total}")
+                # Conteo actual (Inmediato)
+                app.count_label.configure(text=f"OBJETOS: {total_now}")
 
-                # Conteos por zonas
+                # Conteos por zonas (El pie de página del contador)
                 if zones:
                     zone_counts = Counter()
                     for d in detections:
@@ -131,9 +149,9 @@ class VisualPainter:
                 else:
                     app.zone_counts_label.configure(text="Conteo global")
 
-                # Actualizar telemetría de sesión
+                # Actualizar telemetría de sesión (Adaptable a Zona)
                 if hasattr(app, 'total_ever_label'):
-                    app.total_ever_label.configure(text=f"{app.total_detections_ever:,}")
+                    app.total_ever_label.configure(text=f"{total_ever:,}")
                 
                 if hasattr(app, 'uptime_label') and app.session_start_time:
                     uptime_sec = int(time.time() - app.session_start_time)
@@ -143,12 +161,13 @@ class VisualPainter:
                     app.uptime_label.configure(text=f"{hrs:02d}:{mins:02d}:{secs:02d}")
 
                 if hasattr(app, 'breakdown_label'):
-                    top = app.session_class_counts.most_common(5)
+                    top = breakdown_source.most_common(5)
                     if top:
-                        txt = "TOP 5 ÚNICOS:\n" + "\n".join([f"• {k.upper()}: {v}" for k, v in top])
+                        header = f"TOP 5 ÚNICOS ({mode.upper()}):"
+                        txt = header + "\n" + "\n".join([f"• {k.upper()}: {v}" for k, v in top])
                         app.breakdown_label.configure(text=txt)
                     else:
-                        app.breakdown_label.configure(text="Sin datos únicos")
+                        app.breakdown_label.configure(text=f"Sin datos en {mode}")
 
             # La gráfica ya tiene su propio control de tiempo interno, pero la llamamos siempre
             # para que use el historial de detecciones si es necesario.
@@ -191,35 +210,35 @@ class VisualPainter:
         w, h = canvas.winfo_width(), canvas.winfo_height()
         if w < 50 or h < 50: return
 
-        # --- FILTRADO POR MODO DE GRÁFICA (ZONAS) ---
+        # --- FILTRADO POR MODO DE GRÁFICA (VIVO) ---
         mode = getattr(app, 'bar_chart_mode', 'General')
-        filtered_detections = detections
-        if mode != "General":
-            try:
-                zone_idx = int(mode[1:]) - 1 # De "Z1" sacamos 0
-                filtered_detections = [d for d in detections if zone_idx in d.get("zone_indices", [])]
-            except:
-                pass
         
-        # Agrupar por class_id para que el filtrado sea preciso
-        labels_map = {}
-        counts = Counter()
-        for d in filtered_detections:
-            cid = d['class_id']
-            labels_map[cid] = d['label']
-            counts[cid] += 1
+        if mode == "General":
+            # Modo General: todas las detecciones del frame
+            labels_map = {d['class_id']: d['label'] for d in detections}
+            counts = Counter([d['class_id'] for d in detections])
+        else:
+            # Modo Zona: solo detecciones del frame actual que estén en dicha zona
+            try:
+                zi = int(mode[1:]) - 1
+                filtered = [d for d in detections if zi in d.get("zone_indices", [])]
+                labels_map = {d['class_id']: d['label'] for d in filtered}
+                counts = Counter([d['class_id'] for d in filtered])
+            except:
+                counts = Counter()
+                labels_map = {}
             
         if not counts:
             txt = "Sin detecciones" if mode == "General" else f"Sin datos en {mode}"
             canvas.create_text(w/2, h/2, text=txt, fill="#444", font=("Arial", 10))
             return
 
-        sorted_cids = sorted(counts.keys(), key=lambda x: counts[x], reverse=True)[:6]
+        sorted_keys = sorted(counts.keys(), key=lambda x: counts[x], reverse=True)[:6]
         max_val = max(counts.values()) if counts else 1
         
         padding = 30
         bar_area_h = h - 60
-        bar_w = (w - (padding * 2)) / len(sorted_cids)
+        bar_w = (w - (padding * 2)) / len(sorted_keys)
         
         def on_bar_click(cid):
             # Lógica de alternancia (Toggle)
@@ -240,25 +259,29 @@ class VisualPainter:
         # Vincular evento general una sola vez (Tkinter find_withtag es más robusto)
         canvas.tag_bind("bar_obj", "<Button-1>", lambda e: None) # Placeholder
 
-        for i, cid in enumerate(sorted_cids):
-            val = counts[cid]
-            label = labels_map[cid]
+        for i, key in enumerate(sorted_keys):
+            val = counts[key]
+            label = labels_map.get(key, str(key))
             bh = (val / max_val) * bar_area_h
             x0 = padding + i * bar_w
             
-            # Color especial si está filtrado
-            is_filtered = app.target_classes and cid in app.target_classes
-            color = "#f59e0b" if is_filtered else "#0ea5e9"
+            # Color especial si está filtrado (solo para General que usa IDs)
+            is_filtered = False
+            if mode == "General":
+                is_filtered = app.target_classes and key in app.target_classes
             
-            tag = f"bar_{cid}"
+            color = "#f59e0b" if is_filtered else ("#10b981" if mode != "General" else "#0ea5e9")
+            
+            tag = f"bar_{key}"
             rect_id = canvas.create_rectangle(x0, h - 30 - bh, x0 + bar_w - 10, h - 30, 
                                             fill=color, outline="", tags=(tag, "bar_obj"))
             
-            canvas.create_text(x0 + (bar_w-10)/2, h - 15, text=label, fill="#94a3b8", font=("Arial", 9), tags=(tag, "bar_obj"))
+            canvas.create_text(x0 + (bar_w-10)/2, h - 15, text=label[:8], fill="#94a3b8", font=("Arial", 9), tags=(tag, "bar_obj"))
             canvas.create_text(x0 + (bar_w-10)/2, h - 45 - bh, text=str(val), fill="#fff", font=("Arial", 9, "bold"), tags=(tag, "bar_obj"))
             
-            # Bind click (Uso de clausura con cid actual)
-            canvas.tag_bind(tag, "<Button-1>", lambda e, c=cid: on_bar_click(c))
+            # Bind click (Solo para modo General para filtrar clases)
+            if mode == "General":
+                canvas.tag_bind(tag, "<Button-1>", lambda e, c=key: on_bar_click(c))
 
     @staticmethod
     def draw_detections(frame, detections, is_focus=False, show_trails=True):
@@ -282,6 +305,9 @@ class VisualPainter:
                     del VisualPainter._track_history[tid]
                     del VisualPainter._cleanup_cnt[tid]
 
+        # Capa para cajas translucidas
+        box_overlay = frame.copy()
+        
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
             label = d["label"]
@@ -308,11 +334,13 @@ class VisualPainter:
                     c = (int(color[0]*alpha), int(color[1]*alpha), int(color[2]*alpha))
                     cv2.line(frame, pts[i-1], pts[i], c, 2)
 
-            # Dibujar Caja
+            # Dibujar Caja (Fondo translucido)
+            cv2.rectangle(box_overlay, (x1, y1), (x2, y2), color, -1)
+            # Dibujar Borde
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
             
             # Dibujar Etiqueta
-            id_txt = f" ID:{t_id}" if t_id is not None else ""
+            id_txt = f" id:{t_id}" if t_id is not None else ""
             tag = f"{label.upper()}{id_txt} {conf:.2f}"
             if is_focus: tag = f"[ FOCUS ] {tag}"
             
@@ -321,7 +349,10 @@ class VisualPainter:
             thick_txt = 2 if is_focus else 1
             (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick_txt)
             
+            # Etiqueta opaca sobre la caja
             cv2.rectangle(frame, (x1, y1 - th - 12), (x1 + tw + 10, y1), color, -1)
             cv2.putText(frame, tag, (x1 + 5, y1 - 8), font, f_scale, (0, 0, 0), thick_txt)
             
+        # Mezclar cajas translucidas
+        cv2.addWeighted(box_overlay, 0.25, frame, 0.75, 0, frame)
         return frame

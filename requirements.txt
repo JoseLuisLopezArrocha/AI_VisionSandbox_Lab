@@ -17,7 +17,7 @@ onnxruntime-gpu>=1.17.0
 onnx>=1.15.0
 
 # === Diagnóstico y Telemetría ===
-pynvml>=11.5.0
+nvidia-ml-py>=12.535.133
 psutil>=5.9.0
 
 # === Tracking y Optimización ===

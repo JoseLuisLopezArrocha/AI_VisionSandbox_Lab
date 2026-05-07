@@ -7,7 +7,6 @@ import os
 import threading
 import time
 import webbrowser
-import platform
 import shutil
 from PIL import Image, ImageTk
 from collections import Counter
@@ -41,6 +40,93 @@ class _SplashScreen(ctk.CTkFrame):
         self.status_label.configure(text=text)
         self.progress.set(progress_val)
         self.update()
+
+class FullscreenImageWindow(ctk.CTkToplevel):
+    """Ventana emergente para visualizar evidencias a tamaño completo."""
+    def __init__(self, parent, img_bgr, title, raw_bgr=None, zoom_bgr=None):
+        super().__init__(parent)
+        self.title(f"Evidencia: {title}")
+        self.geometry("1000x700")
+        self.after(100, lambda: self.focus_force())
+        
+        # Convertir BGR a RGB para PIL
+        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(rgb)
+        
+        # Ajustar imagen al tamaño de la ventana
+        self.bind("<Configure>", lambda e: self._resize_img())
+        
+        self.img_label = ctk.CTkLabel(self, text="", corner_radius=0)
+        self.img_label.pack(fill="both", expand=True)
+        
+        # Guardar frames para toggle
+        self.img_ann = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        self.img_raw = None
+        if raw_bgr is not None:
+            self.img_raw = Image.fromarray(cv2.cvtColor(raw_bgr, cv2.COLOR_BGR2RGB))
+        self.img_zoom = None
+        if zoom_bgr is not None:
+            self.img_zoom = Image.fromarray(cv2.cvtColor(zoom_bgr, cv2.COLOR_BGR2RGB))
+        
+        self.current_img = self.img_ann
+        
+        # Botones de control
+        self.controls = ctk.CTkFrame(self, fg_color='transparent', height=40, corner_radius=0)
+        self.controls.pack(fill='x', side='bottom', pady=10)
+        
+        self.btn_group = ctk.CTkFrame(self.controls, fg_color='transparent', corner_radius=0)
+        self.btn_group.pack(expand=True)
+        
+        # Botón de modo
+        self.btn_toggle = ctk.CTkButton(self.btn_group, text="VER ORIGINAL (RAW)", command=self._toggle_mode, fg_color='#334155', width=150, corner_radius=0)
+        self.btn_toggle.pack(side='left', padx=5)
+        
+        if self.img_raw is None:
+            self.btn_toggle.configure(state="disabled", text="RAW NO DISPONIBLE")
+        
+        if self.img_zoom:
+            self.btn_zoom = ctk.CTkButton(self.btn_group, text="VER SMART ZOOM ⚡", command=self._toggle_zoom, fg_color='#1e293b', width=150, corner_radius=0)
+            self.btn_zoom.pack(side='left', padx=5)
+        
+        self._resize_img()
+
+    def _toggle_zoom(self):
+        if self.img_zoom is None: return
+        if self.current_img == self.img_zoom:
+            self.current_img = self.img_ann
+            self.btn_zoom.configure(text="VER SMART ZOOM ⚡", fg_color='#1e293b')
+        else:
+            self.current_img = self.img_zoom
+            self.btn_zoom.configure(text="VOLVER A GENERAL", fg_color='#d97706')
+            if self.img_raw is not None:
+                self.btn_toggle.configure(text="VER ORIGINAL (RAW)", fg_color='#334155')
+        self._resize_img()
+
+    def _toggle_mode(self):
+        if self.img_raw is None: return
+        if self.current_img == self.img_raw:
+            self.current_img = self.img_ann
+            self.btn_toggle.configure(text="VER ORIGINAL (RAW)", fg_color='#334155')
+        else:
+            self.current_img = self.img_raw
+            self.btn_toggle.configure(text="VER ANOTADA (AI)", fg_color='#059669')
+            if self.img_zoom: 
+                self.btn_zoom.configure(text="VER SMART ZOOM ⚡", fg_color='#1e293b')
+        self._resize_img()
+
+    def _resize_img(self):
+        if self.current_img is None: return
+        w, h = self.winfo_width(), self.winfo_height() - 60 # Espacio para controles
+        if w < 100 or h < 100: return
+        
+        # Mantener ratio
+        iw, ih = self.current_img.size
+        ratio = min(w/iw, h/ih)
+        new_size = (int(iw*ratio), int(ih*ratio))
+        
+        img_ctk = ctk.CTkImage(light_image=self.current_img, dark_image=self.current_img, size=new_size)
+        self.img_label.configure(image=img_ctk)
+        self.img_label.image = img_ctk
 
 class VisionApp(ctk.CTk):
     """Aplicación Principal: Dashboard de Control de Visión Artificial."""
@@ -83,6 +169,7 @@ class VisionApp(ctk.CTk):
         self.session_start_time = time.time()
         self.session_seen_ids = set()
         self.session_class_counts = Counter()
+        self.session_zone_data = {} # {idx: {"ids": set(), "counts": Counter()}}
         self.bar_chart_mode = 'General'
         self.data_logger = DataLogger()
         self.event_engine = EventEngine()
@@ -289,9 +376,23 @@ class VisionApp(ctk.CTk):
         self.breakdown_label.pack(pady=5)
         l_frame = ctk.CTkFrame(self.dash, fg_color='transparent', corner_radius=0)
         l_frame.grid(row=0, column=3, padx=20, pady=15, sticky='nsew')
-        ctk.CTkLabel(l_frame, text='EVENTOS DEL SISTEMA', font=ctk.CTkFont(size=10, weight='bold'), text_color='#444', corner_radius=0).pack(anchor='w')
-        self.log_textbox = ctk.CTkTextbox(l_frame, font=ctk.CTkFont(family='Consolas', size=10), height=140, border_color='#222', border_width=1, corner_radius=0)
+        self.log_tabs = ctk.CTkTabview(l_frame, height=140, corner_radius=0, fg_color='transparent', segmented_button_selected_color='#334155', segmented_button_unselected_color='#0f172a')
+        self.log_tabs.pack(fill='both', expand=True)
+        
+        tab_sys = self.log_tabs.add('SISTEMA')
+        tab_hits = self.log_tabs.add('HITOS')
+        
+        self.log_textbox = ctk.CTkTextbox(tab_sys, font=ctk.CTkFont(family='Consolas', size=10), border_color='#222', border_width=1, corner_radius=0)
         self.log_textbox.pack(fill='both', expand=True)
+        
+        self.log_textbox_hitos = ctk.CTkTextbox(tab_hits, font=ctk.CTkFont(family='Consolas', size=10), border_color='#222', border_width=1, corner_radius=0, text_color='#10b981')
+        self.log_textbox_hitos.pack(fill='both', expand=True)
+        
+        # Botón ABRIR HISTORIAL ahora en el header de l_frame si cabe, o lo dejamos fuera
+        log_header = ctk.CTkFrame(l_frame, fg_color='transparent', corner_radius=0)
+        log_header.pack(fill='x', before=self.log_tabs)
+        ctk.CTkLabel(log_header, text='LOGS DE ACTIVIDAD', font=ctk.CTkFont(size=10, weight='bold'), text_color='#444', corner_radius=0).pack(side='left', anchor='w')
+        ctk.CTkButton(log_header, text='ABRIR CARPETA', width=100, height=18, font=ctk.CTkFont(size=9, weight='bold'), fg_color='#1e293b', hover_color='#334155', text_color='#94a3b8', command=self.open_history_folder, corner_radius=0).pack(side='right')
 
     def _build_main_area(self):
         """Área central de visualización."""
@@ -376,7 +477,7 @@ class VisionApp(ctk.CTk):
         """Delega la actualización de métricas al pintor visual."""
         self._last_zone_counts = VisualPainter.update_sidebar_metrics(self, t0, self.last_detections, self.zones)
 
-    def add_evidence(self, img_bgr, title, is_ok):
+    def add_evidence(self, img_bgr, title, is_ok, raw_frame=None, zoom_frame=None):
         """Añade una miniatura de evidencia a la galería de la UI."""
         try:
             h, w = img_bgr.shape[:2]
@@ -385,13 +486,21 @@ class VisionApp(ctk.CTk):
             small = cv2.resize(img_bgr, (target_w, target_h))
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
             img_pil = Image.fromarray(rgb)
-            img_tk = ImageTk.PhotoImage(img_pil)
+            img_ctk = ctk.CTkImage(light_image=img_pil, dark_image=img_pil, size=(target_w, target_h))
+            
             border_color = '#16a34a' if is_ok else '#7f1d1d'
             card = ctk.CTkFrame(self.evidence_scroll, fg_color='#0f172a', border_width=2, border_color=border_color, corner_radius=0)
             card.pack(side='left', padx=5, pady=2)
-            lbl_img = ctk.CTkLabel(card, image=img_tk, text='', corner_radius=0)
-            lbl_img.image = img_tk
+            lbl_img = ctk.CTkLabel(card, image=img_ctk, text='', cursor='hand2', corner_radius=0)
+            lbl_img.image = img_ctk
             lbl_img.pack(padx=2, pady=2)
+            
+            # Click para ampliar (Pasa los 3 frames)
+            def _on_click(event, bgr=img_bgr.copy(), t=title, raw=raw_frame.copy() if raw_frame is not None else None, zoom=zoom_frame.copy() if zoom_frame is not None else None):
+                FullscreenImageWindow(self, bgr, t, raw_bgr=raw, zoom_bgr=zoom)
+            
+            lbl_img.bind("<Button-1>", _on_click)
+            
             ctk.CTkLabel(card, text=title[:15], font=('', 10), corner_radius=0).pack()
             self.evidence_items.insert(0, card)
             if len(self.evidence_items) > 8:
@@ -472,14 +581,26 @@ class VisionApp(ctk.CTk):
                 self.annotated_frame = ann
             for d in detections:
                 tid = d.get('track_id')
-                if tid is not None and tid not in self.session_seen_ids:
-                    self.session_seen_ids.add(tid)
-                    self.session_class_counts[d['label']] += 1
-                    self.total_detections_ever = len(self.session_seen_ids)
+                if tid is not None:
+                    # Registro Global
+                    if tid not in self.session_seen_ids:
+                        self.session_seen_ids.add(tid)
+                        self.session_class_counts[d['label']] += 1
+                    
+                    # Registro por Zonas
+                    for zi in d.get('zone_indices', []):
+                        if zi >= 0:
+                            if zi not in self.session_zone_data:
+                                self.session_zone_data[zi] = {"ids": set(), "counts": Counter()}
+                            if tid not in self.session_zone_data[zi]["ids"]:
+                                self.session_zone_data[zi]["ids"].add(tid)
+                                self.session_zone_data[zi]["counts"][d['label']] += 1
+            
+            self.total_detections_ever = len(self.session_seen_ids)
             self.event_engine.update_cumulative_stats(detections)
 
-            def on_evidence(img, msg, ok):
-                self.after(0, lambda: self.add_evidence(img, msg, ok))
+            def on_evidence(img, msg, ok, raw_frame=None, zoom_frame=None):
+                self.after(0, lambda: self.add_evidence(img, msg, ok, raw_frame=raw_frame, zoom_frame=zoom_frame))
             self.event_engine.evaluate(detections, frame=frame, source=self.url, app_log_callback=self.add_log, evidence_callback=on_evidence)
             ms = int((time.time() - t_infer) * 1000)
             self.after(0, lambda: self.infer_label.configure(text=f'INFERENCIA: {ms} ms'))
@@ -499,6 +620,7 @@ class VisionApp(ctk.CTk):
         self.session_start_time = time.time()
         self.session_seen_ids = set()
         self.session_class_counts = Counter()
+        self.session_zone_data = {}
         resolution = self.stream_quality_var.get()
         self.add_log(f"Configurando fuente: {(os.path.basename(self.url) if os.path.exists(self.url) else self.url[:40] + '...')} ({resolution})")
 
@@ -547,17 +669,29 @@ class VisionApp(ctk.CTk):
             self.live_dot.configure(text_color=new_color)
         self.after(800, self._blink_live_indicator)
 
-    def add_log(self, msg):
-        """Añade un mensaje al log de forma segura desde cualquier hilo."""
+    def add_log(self, msg, is_event=False):
+        """Añade un mensaje al log (Sistema o Hitos) de forma segura desde cualquier hilo."""
 
         def _task():
             try:
-                if hasattr(self, 'log_textbox') and self.log_textbox.winfo_exists():
-                    self.log_textbox.insert('end', f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-                    self.log_textbox.see('end')
+                target = self.log_textbox_hitos if is_event else self.log_textbox
+                if hasattr(self, 'log_tabs') and target.winfo_exists():
+                    target.insert('end', f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+                    target.see('end')
+                    # Si es un hito, saltar visualmente a la pestaña de hitos para avisar al usuario
+                    if is_event:
+                        self.log_tabs.set('HITOS')
             except:
                 pass
         self.after(0, _task)
+
+    def open_history_folder(self):
+        """Abre la carpeta de evidencias y logs en el explorador de archivos."""
+        from ..utils.helpers import LOGS_DIR
+        if os.path.exists(LOGS_DIR):
+            os.startfile(LOGS_DIR)
+        else:
+            self.add_log('La carpeta de historial aún no ha sido creada.')
 
     def export_telemetry(self):
         """Copia el archivo de log actual a una ubicación elegida por el usuario."""
@@ -581,6 +715,7 @@ class VisionApp(ctk.CTk):
         cfg = load_app_config(self.url)
         if cfg:
             self.zones, self.target_classes = (cfg.get('zones', []), cfg.get('target_classes'))
+            self._update_bar_mode_buttons()
 
     def _update_world_prompt_visibility(self, visible):
         if visible:

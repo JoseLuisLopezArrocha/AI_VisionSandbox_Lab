@@ -63,13 +63,24 @@ class DBManager:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     rule_name TEXT,
                     message TEXT,
-                    evidence_path TEXT
+                    evidence_path TEXT,
+                    raw_evidence_path TEXT,
+                    zoom_evidence_path TEXT
                 )
             ''')
             
             conn.commit()
+            
+            # Migración: Verificar si falta las nuevas columnas
+            cursor.execute("PRAGMA table_info(events)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'raw_evidence_path' not in columns:
+                cursor.execute('ALTER TABLE events ADD COLUMN raw_evidence_path TEXT')
+            if 'zoom_evidence_path' not in columns:
+                cursor.execute('ALTER TABLE events ADD COLUMN zoom_evidence_path TEXT')
+            conn.commit()
         except Exception as e:
-            log_error("EXE-UTL-DB-01", f"Error inicializando DB: {e}")
+            log_error("EXE-UTL-DB-01", f"Error inicializando/migrando DB: {e}")
 
     def log_detections(self, detections):
         """Acumula detecciones en un buffer y las escribe en batch periodicamente."""
@@ -109,7 +120,7 @@ class DBManager:
         except Exception as e:
             log_error("EXE-UTL-DB-02", f"Error en batch insert de detecciones: {e}")
 
-    def log_event(self, rule_name, message, evidence_path=""):
+    def log_event(self, rule_name, message, evidence_path="", raw_evidence_path="", zoom_evidence_path=""):
         """Registra la activacion de un hito (escritura inmediata por ser evento critico)."""
         try:
             conn = self._get_conn()
@@ -117,8 +128,8 @@ class DBManager:
                 return
             with self._lock:
                 cursor = conn.cursor()
-                cursor.execute('INSERT INTO events (rule_name, message, evidence_path) VALUES (?, ?, ?)', 
-                               (rule_name, message, evidence_path))
+                cursor.execute('INSERT INTO events (rule_name, message, evidence_path, raw_evidence_path, zoom_evidence_path) VALUES (?, ?, ?, ?, ?)', 
+                               (rule_name, message, evidence_path, raw_evidence_path, zoom_evidence_path))
                 conn.commit()
         except Exception as e:
             log_error("EXE-UTL-DB-03", f"Error logueando evento: {e}")

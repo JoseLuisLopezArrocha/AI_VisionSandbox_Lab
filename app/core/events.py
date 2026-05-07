@@ -113,7 +113,8 @@ class EventEngine:
             if now - self.last_triggered.get(rule['id'], 0) < rule['cooldown']:
                 continue
                 
-            count = sum(1 for d in detections if (rule['class_target'] == "Cualquiera" or d['label'] == rule['class_target']) and self._check_zone(d, rule))
+            filtered = [d for d in detections if (rule['class_target'] == "Cualquiera" or d['label'] == rule['class_target']) and self._check_zone(d, rule)]
+            count = len(filtered)
             
             triggered = False
             op, val = rule['condition_op'], rule['condition_val']
@@ -130,7 +131,7 @@ class EventEngine:
                 
                 time_active = now - self.active_conditions_start[rule['id']]
                 if time_active >= rule.get('persistence', 0):
-                    self._trigger_action(rule, count, frame, source, app_log_callback, evidence_callback)
+                    self._trigger_action(rule, count, frame, source, app_log_callback, evidence_callback, filtered)
                     self.last_triggered[rule['id']] = now
             else:
                 if rule['id'] in self.active_conditions_start:
@@ -140,7 +141,7 @@ class EventEngine:
         if detections:
             self.db.log_detections(detections)
 
-    def _trigger_action(self, rule, current_count, frame, source, app_log_callback, evidence_callback):
+    def _trigger_action(self, rule, current_count, frame, source, app_log_callback, evidence_callback, detections=None):
         """Orquesta la respuesta al hito: logs, validacion IA y alertas externas."""
         targets = rule.get('zone_targets', [-1])
         if not targets or -1 in targets:
@@ -150,16 +151,25 @@ class EventEngine:
             readable_targets = [str(t + 1) for t in targets]
             zona_text = f"Zonas [{','.join(readable_targets)}] ({op_txt})"
             
-        msg = f"Hito: '{rule['name']}' -> {current_count} {rule['class_target']} en {zona_text}."
+        custom_msg = rule.get("custom_message", "").strip()
+        if custom_msg:
+            # Reemplazar variables dinamicas si existen
+            msg = custom_msg.replace("{count}", str(current_count)).replace("{class}", rule['class_target']).replace("{zone}", zona_text).replace("{name}", rule['name'])
+        else:
+            msg = f"Hito: '{rule['name']}' -> {current_count} {rule['class_target']} en {zona_text}."
         
-        if app_log_callback: app_log_callback(f"[ACTIVADO] {rule['name']}")
+        # Reportar al log del sistema (General)
+        if app_log_callback:
+            app_log_callback(f"[EVENTO] {rule['name']} activado.")
+            # Reportar al log de HITOS (Separado)
+            app_log_callback(msg, is_event=True)
         
         val_config = rule.get("validator", {})
         provider = val_config.get("provider", "None")
         
         if provider == "None":
             # Sin validacion secundaria: disparar alertas directamente
-            self._send_external_alerts(rule, msg, frame, source, current_count)
+            self._send_external_alerts(rule, msg, frame, source, current_count, evidence_callback, detections)
         elif frame is not None:
             # Enriquecer val_config con los datos de conexion del engine
             enriched_config = {**val_config}
@@ -167,28 +177,84 @@ class EventEngine:
             enriched_config["ollama_model"] = self.config.get("ollama_model", "")
             enriched_config["huggingface_api_key"] = self.config.get("huggingface_api_key", "")
             enriched_config["huggingface_model"] = self.config.get("huggingface_model", "")
+            enriched_config["class_target"] = rule.get("class_target", "Cualquiera")
             
             # Validacion via VLM (Asincrona)
             SecondaryValidator.validate_async(frame, enriched_config, rule["name"], app_log_callback, 
-                                            lambda img, m, ok: self._send_external_alerts(rule, m, img, source, current_count) if ok else None)
+                                            lambda img, m, ok: self._send_external_alerts(rule, m, img, source, current_count, evidence_callback, detections) if ok else None)
 
-    def _send_external_alerts(self, rule, msg, frame=None, source="", count=0):
+    def _send_external_alerts(self, rule, msg, frame=None, source="", count=0, evidence_callback=None, detections=None):
         """Gestiona el envio de evidencias, logs a SQLite, alertas Telegram/Webhooks y TTS."""
         actions = rule.get('actions', [rule.get('action', 'log')])
         severity = rule.get('severity', 'Info')
         
         # 1. Guardar Evidencia Local
         evidence_path = ""
+        raw_evidence_path = ""
+        zoom_evidence_path = ""
+        
         if rule.get('save_evidence', False) and frame is not None:
-            fname = f"EV_{int(time.time())}_{severity}_{rule['name'].replace(' ', '_')}.jpg"
-            evidence_path = os.path.join(self.evidence_dir, fname)
+            ts = int(time.time())
+            fname_ann = f"EV_{ts}_{severity}_{rule['name'].replace(' ', '_')}_ANN.jpg"
+            fname_raw = f"EV_{ts}_{severity}_{rule['name'].replace(' ', '_')}_RAW.jpg"
+            fname_zoom = f"EV_{ts}_{severity}_{rule['name'].replace(' ', '_')}_ZOOM.jpg"
+            
+            evidence_path = os.path.join(self.evidence_dir, fname_ann)
+            raw_evidence_path = os.path.join(self.evidence_dir, fname_raw)
+            zoom_evidence_path = os.path.join(self.evidence_dir, fname_zoom)
+            
             try:
-                cv2.imwrite(evidence_path, frame)
+                # Guardar RAW
+                cv2.imwrite(raw_evidence_path, frame)
+                
+                # Dibujar detecciones sobre la evidencia si existen
+                save_frame_ann = frame.copy()
+                if detections:
+                    from ..utils.painter import VisualPainter
+                    save_frame_ann = VisualPainter.draw_detections(save_frame_ann, detections, show_trails=False)
+                    
+                    # --- SMART ZOOM LOGIC ---
+                    h, w = frame.shape[:2]
+                    x_coords = [d['bbox'][0] for d in detections] + [d['bbox'][2] for d in detections]
+                    y_coords = [d['bbox'][1] for d in detections] + [d['bbox'][3] for d in detections]
+                    
+                    x1, y1 = max(0, min(x_coords) - 50), max(0, min(y_coords) - 50)
+                    x2, y2 = min(w, max(x_coords) + 50), min(h, max(y_coords) + 50)
+                    
+                    # Solo hacer zoom si el área resultante no es casi todo el frame (> 20% y < 80%)
+                    area_ratio = ((x2-x1)*(y2-y1)) / (w*h)
+                    if 0.01 < area_ratio < 0.7:
+                        zoom_frame = frame[y1:y2, x1:x2].copy()
+                        # También dibujar en el zoom para claridad
+                        # Ajustar bboxes para el crop
+                        zoom_dets = []
+                        for d in detections:
+                            zd = d.copy()
+                            bx = d['bbox']
+                            zd['bbox'] = (bx[0]-x1, bx[1]-y1, bx[2]-x1, bx[3]-y1)
+                            zoom_dets.append(zd)
+                        
+                        zoom_frame = VisualPainter.draw_detections(zoom_frame, zoom_dets, show_trails=False)
+                        cv2.imwrite(zoom_evidence_path, zoom_frame)
+                    else:
+                        zoom_evidence_path = "" # No merece la pena el zoom
+                
+                # Guardar ANNOTATED
+                cv2.imwrite(evidence_path, save_frame_ann)
             except Exception:
                 evidence_path = ""
+                raw_evidence_path = ""
+                zoom_evidence_path = ""
+        
+        # Notificar a la UI si se guardó evidencia y hay callback
+        if evidence_path and evidence_callback:
+            # Enviamos la anotada por defecto para la miniatura, pero permitimos acceso a ambas
+            final_frame = save_frame_ann if 'save_frame_ann' in locals() else frame
+            zoom_img = cv2.imread(zoom_evidence_path) if zoom_evidence_path and os.path.exists(zoom_evidence_path) else None
+            evidence_callback(final_frame, msg, True, raw_frame=frame, zoom_frame=zoom_img)
         
         # 2. Registrar en SQLite (Persistencia Analitica)
-        self.db.log_event(rule['name'], f"[{severity.upper()}] {msg}", evidence_path)
+        self.db.log_event(rule['name'], f"[{severity.upper()}] {msg}", evidence_path, raw_evidence_path, zoom_evidence_path)
         
         # 3. TTS (Sintesis de Voz)
         if "tts" in actions or "all" in actions:
@@ -242,7 +308,7 @@ class EventEngine:
 
     def add_rule(self, name, class_target, zone_targets, zone_operator, condition_op, condition_val, 
                  actions, cooldown, persistence, severity, save_evidence,
-                 validator_provider="None", validator_prompt=""):
+                 validator_provider="None", validator_prompt="", custom_message=""):
         """Crea una nueva regla de evento y persiste."""
         rule = {
             "id": f"rule_{int(time.time() * 1000)}",
@@ -260,7 +326,8 @@ class EventEngine:
             "validator": {
                 "provider": validator_provider,
                 "prompt": validator_prompt,
-            }
+            },
+            "custom_message": custom_message
         }
         self.rules.append(rule)
         self.save_rules()
@@ -310,6 +377,11 @@ class EventEngine:
             return resp.status_code == 200, resp.text
         except Exception as e:
             return False, str(e)
+
+    def test_tts(self, text="Prueba de síntesis de voz activada correctamente."):
+        """Realiza una prueba de voz."""
+        self._speak(text)
+        return True, "Enviado a cola de voz"
 
     def test_vlm(self, provider, frame, class_name, log_callback, config_override=None):
         """Lanza una validación de prueba usando el proveedor VLM configurado (o override)."""

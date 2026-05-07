@@ -58,10 +58,14 @@ class SecondaryValidator:
             result_ok, result_msg, evidence_img = False, "", None
 
             if provider == "universal":
-                prompt = config.get("prompt", "object")
+                prompt = config.get("prompt")
+                if not prompt:
+                    prompt = config.get("class_target", "object")
                 result_ok, result_msg, evidence_img = SecondaryValidator._validate_universal(frame, prompt)
             elif provider == "local_seg":
-                target_class = config.get("prompt", "person") or config.get("target_class", "person")
+                target_class = config.get("prompt")
+                if not target_class:
+                    target_class = config.get("class_target", "person")
                 seg_config = {**config, "target_class": target_class}
                 result_ok, result_msg, evidence_img = SecondaryValidator._validate_local_seg(frame, seg_config)
             elif provider == "ollama":
@@ -124,7 +128,7 @@ class SecondaryValidator:
             question = (
                 f"Analyze this image. Is there a '{prompt}' present? "
                 f"Answer with exactly 'Confirmado' if yes, or 'No detectado' if no. "
-                f"Then briefly explain why."
+                f"Then provide a very brief explanation (max 10 words)."
             )
             
             payload = {
@@ -141,9 +145,8 @@ class SecondaryValidator:
                 response_text = data.get("response", "").strip()
                 is_confirmed = "confirmado" in response_text.lower()
                 status = "Confirmado" if is_confirmed else "No detectado"
-                # Truncar respuesta para el log
-                short_response = response_text[:100] + ("..." if len(response_text) > 100 else "")
-                return is_confirmed, f"Ollama ({model}): {status} -- {short_response}"
+                # Mostramos la respuesta completa en el log (el widget de la UI se encarga del scroll)
+                return is_confirmed, f"Ollama ({model}): {status} -- {response_text}"
             else:
                 return False, f"Ollama: Error HTTP {resp.status_code}"
                 

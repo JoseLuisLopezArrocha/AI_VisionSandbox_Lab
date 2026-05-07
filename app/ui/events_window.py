@@ -7,7 +7,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 from ..utils.error_handler import log_error
 CONDITION_OPS = ['>', '<', '==', '>=', '<=', 'Total >']
-ZONE_OPERATORS = [('DENTRO (O)', 'OR'), ('DENTRO (Y)', 'AND'), ('FUERA (Exclusion)', 'NOT')]
+ZONE_OPERATORS = [('Cualquiera de las seleccionadas (O)', 'OR'), ('Debe estar en TODAS las seleccionadas (Y)', 'AND'), ('FUERA de las seleccionadas (NOT)', 'NOT')]
 SEVERITY_LEVELS = [('Info', '#3b82f6'), ('Alerta', '#eab308'), ('Critico', '#ef4444')]
 PERSISTENCE_PRESETS = [('Instantaneo', 0), ('2s', 2), ('5s', 5), ('10s', 10), ('30s', 30)]
 COOLDOWN_PRESETS = [('5s', 5), ('10s', 10), ('30s', 30), ('1 min', 60), ('5 min', 300), ('Sin limite', 0)]
@@ -54,7 +54,7 @@ class EventsWindow(ctk.CTkToplevel):
         self.zones_count = zones_count
         self.rule_widgets = []
         self.title('Gestor de Hitos y Eventos')
-        self.geometry('750x780')
+        self.geometry('800x850')
         self.grab_set()
         header = ctk.CTkFrame(self, fg_color='#0f172a', corner_radius=0)
         header.pack(fill='x')
@@ -73,88 +73,107 @@ class EventsWindow(ctk.CTkToplevel):
         """Construye el formulario completo de creacion de reglas."""
         frame = ctk.CTkFrame(self, fg_color='#1e293b', border_width=1, border_color='#334155', corner_radius=0)
         frame.pack(fill='x', padx=20, pady=10)
-        ctk.CTkLabel(frame, text='Nombre del Hito:', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(pady=(10, 2), padx=12, anchor='w')
-        self.entry_name = ctk.CTkEntry(frame, placeholder_text='Ej: Alerta multitud, Zona vacia...', corner_radius=0)
-        self.entry_name.pack(pady=(0, 8), padx=12, fill='x')
-        cond_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
-        cond_frame.pack(fill='x', padx=12, pady=2)
-        cls_col = ctk.CTkFrame(cond_frame, fg_color='transparent', corner_radius=0)
-        cls_col.pack(side='left', fill='x', expand=True, padx=(0, 5))
-        ctk.CTkLabel(cls_col, text='Clase:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.sel_class = ctk.CTkOptionMenu(cls_col, values=self.available_classes, width=140, corner_radius=0)
+
+        # --- BLOQUE 1: IDENTIDAD ---
+        id_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
+        id_frame.pack(fill='x', padx=12, pady=5)
+        
+        name_col = ctk.CTkFrame(id_frame, fg_color='transparent', corner_radius=0)
+        name_col.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        ctk.CTkLabel(name_col, text='Nombre del Hito:', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w')
+        self.entry_name = ctk.CTkEntry(name_col, placeholder_text='Ej: Alerta intruso...', corner_radius=0)
+        self.entry_name.pack(fill='x')
+        
+        cls_col = ctk.CTkFrame(id_frame, fg_color='transparent', corner_radius=0)
+        cls_col.pack(side='left', fill='x', expand=True)
+        ctk.CTkLabel(cls_col, text='Clase a detectar:', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w')
+        self.sel_class = ctk.CTkOptionMenu(cls_col, values=self.available_classes, corner_radius=0)
         self.sel_class.pack(fill='x')
-        op_col = ctk.CTkFrame(cond_frame, fg_color='transparent', corner_radius=0)
-        op_col.pack(side='left', padx=5)
-        ctk.CTkLabel(op_col, text='Condicion:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.sel_op = ctk.CTkOptionMenu(op_col, values=CONDITION_OPS, width=80, corner_radius=0)
-        self.sel_op.set('>')
-        self.sel_op.pack()
-        val_col = ctk.CTkFrame(cond_frame, fg_color='transparent', corner_radius=0)
-        val_col.pack(side='left', padx=5)
-        ctk.CTkLabel(val_col, text='Valor:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.entry_val = ctk.CTkEntry(val_col, width=60, placeholder_text='5', corner_radius=0)
-        self.entry_val.pack()
-        opt_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
-        opt_frame.pack(fill='x', padx=12, pady=(8, 2))
-        zone_col = ctk.CTkFrame(opt_frame, fg_color='transparent', corner_radius=0)
-        zone_col.pack(side='left', fill='x', expand=True, padx=(0, 5))
-        ctk.CTkLabel(zone_col, text='Zonas:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
+
+        # --- BLOQUE 2: LÓGICA ESPACIAL ---
+        space_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
+        space_frame.pack(fill='x', padx=12, pady=5)
+        
+        zone_col = ctk.CTkFrame(space_frame, fg_color='transparent', corner_radius=0)
+        zone_col.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        ctk.CTkLabel(zone_col, text='Zonas de interés:', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w')
         self.selected_zones = [-1]
-        self.btn_zone = ctk.CTkButton(zone_col, text='Global', width=80, command=self._open_zone_selector, fg_color='#334155', hover_color='#475569', corner_radius=0)
+        self.btn_zone = ctk.CTkButton(zone_col, text='Global', command=self._open_zone_selector, fg_color='#334155', hover_color='#475569', corner_radius=0)
         self.btn_zone.pack(fill='x')
-        zop_col = ctk.CTkFrame(opt_frame, fg_color='transparent', corner_radius=0)
-        zop_col.pack(side='left', fill='x', expand=True, padx=5)
-        ctk.CTkLabel(zop_col, text='Lugar:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.sel_zop = ctk.CTkOptionMenu(zop_col, values=[z[0] for z in ZONE_OPERATORS], width=110, corner_radius=0)
+        
+        zop_col = ctk.CTkFrame(space_frame, fg_color='transparent', corner_radius=0)
+        zop_col.pack(side='left', fill='x', expand=True)
+        ctk.CTkLabel(zop_col, text='Relación entre zonas:', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w')
+        self.sel_zop = ctk.CTkOptionMenu(zop_col, values=[z[0] for z in ZONE_OPERATORS], corner_radius=0)
         self.sel_zop.pack(fill='x')
-        sev_col = ctk.CTkFrame(opt_frame, fg_color='transparent', corner_radius=0)
-        sev_col.pack(side='left', fill='x', expand=True, padx=5)
-        ctk.CTkLabel(sev_col, text='Severidad:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.sel_severity = ctk.CTkOptionMenu(sev_col, values=[s[0] for s in SEVERITY_LEVELS], width=100, corner_radius=0)
-        self.sel_severity.pack(fill='x')
-        act_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
-        act_frame.pack(fill='x', padx=12, pady=(8, 2))
-        ctk.CTkLabel(act_frame, text='Acciones a disparar:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        checks_row = ctk.CTkFrame(act_frame, fg_color='transparent', corner_radius=0)
-        checks_row.pack(fill='x')
-        self.chk_log = ctk.CTkCheckBox(checks_row, text='Log', width=50, corner_radius=0)
-        self.chk_log.pack(side='left', padx=(0, 5))
-        self.chk_log.select()
-        self.chk_telegram = ctk.CTkCheckBox(checks_row, text='Telegram', width=70, corner_radius=0)
-        self.chk_telegram.pack(side='left', padx=5)
-        self.chk_webhook = ctk.CTkCheckBox(checks_row, text='Webhook', width=70, corner_radius=0)
-        self.chk_webhook.pack(side='left', padx=5)
-        self.chk_tts = ctk.CTkCheckBox(checks_row, text='Voz', width=50, corner_radius=0)
-        self.chk_tts.pack(side='left', padx=5)
-        self.chk_photo = ctk.CTkCheckBox(checks_row, text='Foto', width=50, corner_radius=0)
-        self.chk_photo.pack(side='left', padx=5)
+
+        # --- BLOQUE 3: CONDICIÓN Y TIEMPO ---
         time_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
-        time_frame.pack(fill='x', padx=12, pady=(8, 2))
+        time_frame.pack(fill='x', padx=12, pady=5)
+        
+        cond_col = ctk.CTkFrame(time_frame, fg_color='transparent', corner_radius=0)
+        cond_col.pack(side='left', padx=(0, 10))
+        ctk.CTkLabel(cond_col, text='Condición:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
+        cond_row = ctk.CTkFrame(cond_col, fg_color='transparent', corner_radius=0)
+        cond_row.pack()
+        self.sel_op = ctk.CTkOptionMenu(cond_row, values=CONDITION_OPS, width=70, corner_radius=0)
+        self.sel_op.set('>')
+        self.sel_op.pack(side='left', padx=(0, 5))
+        self.entry_val = ctk.CTkEntry(cond_row, width=50, placeholder_text='1', corner_radius=0)
+        self.entry_val.pack(side='left')
+        
         cd_col = ctk.CTkFrame(time_frame, fg_color='transparent', corner_radius=0)
-        cd_col.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        cd_col.pack(side='left', fill='x', expand=True, padx=5)
         ctk.CTkLabel(cd_col, text='Cooldown:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.sel_cooldown = ctk.CTkOptionMenu(cd_col, values=[c[0] for c in COOLDOWN_PRESETS], width=90, corner_radius=0)
+        self.sel_cooldown = ctk.CTkOptionMenu(cd_col, values=[c[0] for c in COOLDOWN_PRESETS], corner_radius=0)
         self.sel_cooldown.set('10s')
         self.sel_cooldown.pack(fill='x')
+        
         pers_col = ctk.CTkFrame(time_frame, fg_color='transparent', corner_radius=0)
         pers_col.pack(side='left', fill='x', expand=True, padx=(5, 0))
         ctk.CTkLabel(pers_col, text='Persistencia:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(anchor='w')
-        self.sel_persistence = ctk.CTkOptionMenu(pers_col, values=[p[0] for p in PERSISTENCE_PRESETS], width=90, corner_radius=0)
+        self.sel_persistence = ctk.CTkOptionMenu(pers_col, values=[p[0] for p in PERSISTENCE_PRESETS], corner_radius=0)
         self.sel_persistence.set('Instantaneo')
         self.sel_persistence.pack(fill='x')
-        val_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
-        val_frame.pack(fill='x', padx=12, pady=(8, 2))
-        prov_col = ctk.CTkFrame(val_frame, fg_color='transparent', corner_radius=0)
-        prov_col.pack(side='left', fill='x', expand=True, padx=(0, 5))
-        ctk.CTkLabel(prov_col, text='Validacion IA:', font=ctk.CTkFont(size=10), text_color='#a78bfa', corner_radius=0).pack(anchor='w')
-        self.sel_validator = ctk.CTkOptionMenu(prov_col, values=[v[0] for v in VALIDATOR_PROVIDERS], width=180, command=self._on_validator_change, corner_radius=0)
+
+        # --- BLOQUE 4: ACCIONES Y VALIDACIÓN ---
+        act_frame = ctk.CTkFrame(frame, fg_color='#0f172a', corner_radius=4, border_width=1, border_color='#334155')
+        act_frame.pack(fill='x', padx=12, pady=10)
+        
+        checks_row = ctk.CTkFrame(act_frame, fg_color='transparent', corner_radius=0)
+        checks_row.pack(fill='x', padx=10, pady=10)
+        ctk.CTkLabel(checks_row, text='Acciones:', font=ctk.CTkFont(size=11, weight='bold'), text_color='#10b981', corner_radius=0).pack(side='left', padx=(0, 10))
+        self.chk_log = ctk.CTkCheckBox(checks_row, text='Log', width=60, corner_radius=0); self.chk_log.pack(side='left'); self.chk_log.select()
+        self.chk_telegram = ctk.CTkCheckBox(checks_row, text='Telegram', width=90, corner_radius=0); self.chk_telegram.pack(side='left')
+        self.chk_webhook = ctk.CTkCheckBox(checks_row, text='Webhook', width=90, corner_radius=0); self.chk_webhook.pack(side='left')
+        self.chk_tts = ctk.CTkCheckBox(checks_row, text='Voz', width=60, corner_radius=0); self.chk_tts.pack(side='left')
+        self.chk_photo = ctk.CTkCheckBox(checks_row, text='Foto', width=60, corner_radius=0); self.chk_photo.pack(side='left')
+        
+        self.sel_severity = ctk.CTkOptionMenu(checks_row, values=[s[0] for s in SEVERITY_LEVELS], width=90, corner_radius=0)
+        self.sel_severity.pack(side='right')
+        ctk.CTkLabel(checks_row, text='Severidad:', font=ctk.CTkFont(size=10), text_color='#94a3b8', corner_radius=0).pack(side='right', padx=5)
+
+        val_row = ctk.CTkFrame(act_frame, fg_color='transparent', corner_radius=0)
+        val_row.pack(fill='x', padx=10, pady=(0, 10))
+        prov_col = ctk.CTkFrame(val_row, fg_color='transparent', corner_radius=0)
+        prov_col.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        ctk.CTkLabel(prov_col, text='Validación IA (Opcional):', font=ctk.CTkFont(size=10), text_color='#a78bfa', corner_radius=0).pack(anchor='w')
+        self.sel_validator = ctk.CTkOptionMenu(prov_col, values=[v[0] for v in VALIDATOR_PROVIDERS], command=self._on_validator_change, corner_radius=0)
         self.sel_validator.pack(fill='x')
-        prompt_col = ctk.CTkFrame(val_frame, fg_color='transparent', corner_radius=0)
-        prompt_col.pack(side='left', fill='x', expand=True, padx=(5, 0))
-        ctk.CTkLabel(prompt_col, text='Prompt / Clase:', font=ctk.CTkFont(size=10), text_color='#a78bfa', corner_radius=0).pack(anchor='w')
-        self.entry_val_prompt = ctk.CTkEntry(prompt_col, placeholder_text='Ej: persona, casco, fuego...', corner_radius=0)
+        
+        prompt_col = ctk.CTkFrame(val_row, fg_color='transparent', corner_radius=0)
+        prompt_col.pack(side='left', fill='x', expand=True)
+        ctk.CTkLabel(prompt_col, text='Clase IA / Prompt:', font=ctk.CTkFont(size=10), text_color='#a78bfa', corner_radius=0).pack(anchor='w')
+        self.entry_val_prompt = ctk.CTkEntry(prompt_col, placeholder_text='Ej: person...', state='disabled', corner_radius=0)
         self.entry_val_prompt.pack(fill='x')
-        ctk.CTkButton(frame, text='REGISTRAR NUEVA REGLA', command=self._add_rule, fg_color='#10b981', hover_color='#059669', height=34, font=ctk.CTkFont(size=12, weight='bold'), corner_radius=0).pack(pady=10, padx=12, fill='x')
+
+        msg_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
+        msg_frame.pack(fill='x', padx=12, pady=(0, 10))
+        ctk.CTkLabel(msg_frame, text='Mensaje de Notificación / Voz (TTS):', font=ctk.CTkFont(size=11, weight='bold'), text_color='#10b981', corner_radius=0).pack(anchor='w')
+        self.entry_custom_msg = ctk.CTkEntry(msg_frame, placeholder_text='Ej: Alerta! {count} {class} en {zone}...', corner_radius=0)
+        self.entry_custom_msg.pack(fill='x')
+        
+        ctk.CTkButton(frame, text='REGISTRAR NUEVA REGLA', command=self._add_rule, fg_color='#10b981', hover_color='#059669', height=40, font=ctk.CTkFont(size=13, weight='bold'), corner_radius=0).pack(pady=(5, 15), padx=12, fill='x')
 
     def _on_validator_change(self, value):
         """Muestra/oculta el campo de prompt segun el proveedor seleccionado."""
@@ -165,13 +184,19 @@ class EventsWindow(ctk.CTkToplevel):
             self.entry_val_prompt.delete(0, 'end')
 
     def _open_zone_selector(self):
-        top = ctk.CTkToplevel(self, corner_radius=0)
-        top.title('Zonas')
-        top.geometry('250x300')
+        # CTkToplevel no acepta corner_radius
+        top = ctk.CTkToplevel(self)
+        top.title('Selección de Zonas')
+        top.geometry('280x350')
+        top.configure(fg_color='#1e293b') # Forzar fondo oscuro
         top.grab_set()
-        ctk.CTkLabel(top, text='Selecciona Zonas Objetivo', font=ctk.CTkFont(weight='bold'), corner_radius=0).pack(pady=10)
-        scroll = ctk.CTkScrollableFrame(top, corner_radius=0)
-        scroll.pack(fill='both', expand=True, padx=10, pady=10)
+        top.focus_set()
+        
+        # Titulo
+        ctk.CTkLabel(top, text='ZONAS OBJETIVO', font=ctk.CTkFont(size=14, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(pady=15)
+        
+        scroll = ctk.CTkScrollableFrame(top, fg_color='#0f172a', corner_radius=0)
+        scroll.pack(fill='both', expand=True, padx=15, pady=5)
         vars_dict = {}
         var_g = ctk.BooleanVar(value=-1 in self.selected_zones)
         chk_g = ctk.CTkCheckBox(scroll, text='Global', variable=var_g, corner_radius=0)
@@ -192,7 +217,7 @@ class EventsWindow(ctk.CTkToplevel):
                 txt = ','.join([str(z + 1) for z in self.selected_zones])
                 self.btn_zone.configure(text=f'Zonas: {txt}')
             top.destroy()
-        ctk.CTkButton(top, text='Aceptar', command=apply, corner_radius=0).pack(pady=10)
+        ctk.CTkButton(top, text='CONFIRMAR SELECCIÓN', command=apply, fg_color='#3b82f6', hover_color='#2563eb', font=ctk.CTkFont(size=11, weight='bold'), height=32, corner_radius=0).pack(pady=15, padx=20, fill='x')
 
     def _refresh_list(self):
         """Actualiza la lista de reglas activas con formato visual."""
@@ -297,10 +322,12 @@ class EventsWindow(ctk.CTkToplevel):
                     validator_provider = internal
                     break
             validator_prompt = self.entry_val_prompt.get().strip()
-            self.engine.add_rule(name=name, class_target=self.sel_class.get(), zone_targets=zone_targets, zone_operator=zone_operator, condition_op=self.sel_op.get(), condition_val=val, actions=actions, cooldown=cooldown, persistence=persistence, severity=severity, save_evidence=save_evidence, validator_provider=validator_provider, validator_prompt=validator_prompt)
+            custom_message = self.entry_custom_msg.get().strip()
+            self.engine.add_rule(name=name, class_target=self.sel_class.get(), zone_targets=zone_targets, zone_operator=zone_operator, condition_op=self.sel_op.get(), condition_val=val, actions=actions, cooldown=cooldown, persistence=persistence, severity=severity, save_evidence=save_evidence, validator_provider=validator_provider, validator_prompt=validator_prompt, custom_message=custom_message)
             self.entry_name.delete(0, 'end')
             self.entry_val.delete(0, 'end')
             self.entry_val_prompt.delete(0, 'end')
+            self.entry_custom_msg.delete(0, 'end')
             self.sel_validator.set('Sin validacion')
             self._refresh_list()
         except ValueError:

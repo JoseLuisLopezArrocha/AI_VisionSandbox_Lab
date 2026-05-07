@@ -93,6 +93,16 @@ class SettingsWindow(ctk.CTkToplevel):
         hf_btns.pack(fill='x', padx=10, pady=(2, 10))
         ctk.CTkButton(hf_btns, text='CONEXIÓN', command=self._test_huggingface, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True, padx=(0, 5))
         ctk.CTkButton(hf_btns, text='TEST VISIÓN', command=lambda: self._test_vlm('huggingface'), fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(side='left', fill='x', expand=True)
+        
+        self._section_header(self.scroll, 'AUDIO Y VOZ (TTS)')
+        tts_frame = ctk.CTkFrame(self.scroll, corner_radius=0)
+        tts_frame.pack(fill='x', pady=(0, 10))
+        ctk.CTkLabel(tts_frame, text='SINTESIS DE VOZ LOCAL', font=ctk.CTkFont(size=11, weight='bold'), text_color='#10b981', corner_radius=0).pack(pady=(10, 2), padx=10, anchor='w')
+        ctk.CTkLabel(tts_frame, text='Texto de prueba:', font=ctk.CTkFont(size=10), corner_radius=0).pack(pady=2, padx=10, anchor='w')
+        self.entry_tts_test = ctk.CTkEntry(tts_frame, placeholder_text='Mensaje a locutar...', corner_radius=0)
+        self.entry_tts_test.insert(0, 'Sistema de visión activo y operando correctamente.')
+        self.entry_tts_test.pack(pady=2, padx=10, fill='x')
+        ctk.CTkButton(tts_frame, text='\uf028 PROBAR VOZ (TTS)', command=self._test_tts, fg_color='#334155', hover_color='#475569', font=ctk.CTkFont(size=9, weight='bold'), height=28, corner_radius=0).pack(pady=(5, 10), padx=10, fill='x')
         btn_frame = ctk.CTkFrame(self, fg_color='transparent', corner_radius=0)
         btn_frame.pack(fill='x', padx=15, pady=10)
         ctk.CTkButton(btn_frame, text='GUARDAR CONFIGURACIÓN', command=self._save, fg_color='#10b981', hover_color='#059669', font=ctk.CTkFont(size=12, weight='bold'), corner_radius=0).pack(fill='x', pady=0)
@@ -201,6 +211,19 @@ class SettingsWindow(ctk.CTkToplevel):
                 if ok: self.parent.add_log('Telegram: TEST EXITOSO (Mensaje enviado).')
                 else: self.parent.add_log(f'Telegram: ERROR -> {detail[:60]}...')
         threading.Thread(target=run, daemon=True).start()
+
+    def _test_tts(self):
+        """Realiza una prueba de voz local."""
+        text = self.entry_tts_test.get().strip()
+        if not text:
+            text = "Prueba de sonido de la aplicación."
+        
+        if hasattr(self.parent, 'add_log'):
+            self.parent.add_log(f'TTS: Ejecutando prueba de voz...')
+        
+        ok, msg = self.engine.test_tts(text)
+        if ok and hasattr(self.parent, 'add_log'):
+            self.parent.add_log(f'TTS: {msg}')
 
     def _test_vlm(self, provider):
         """Lanza una validación asíncrona usando los valores actuales de la UI."""

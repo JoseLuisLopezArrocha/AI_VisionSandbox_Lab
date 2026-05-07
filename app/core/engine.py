@@ -70,7 +70,7 @@ class VisionEngine:
                     try:
                         # Para YouTube siempre usamos CamGear ya que gestiona mucho mejor el buffering que VideoCapture
                         options = {"STREAM_RESOLUTION": resolution, "THREADED_QUEUE_MODE": True}
-                        self.stream = CamGear(source=source, stream_mode=True, logging=False, **options).start()
+                        self.stream = CamGear(source=source, stream_mode=True, logging=False, backend=cv2.CAP_FFMPEG, **options).start()
                         self.is_live = True # Marcamos como live para usar el lector de CamGear directamente
                     except Exception as e:
                         log_error("EXE-COR-CONN-01", f"Error con CamGear en YouTube: {e}")
@@ -80,7 +80,7 @@ class VisionEngine:
 
                     if self.is_live:
                         options = {"STREAM_RESOLUTION": resolution, "THREADED_QUEUE_MODE": True}
-                        self.stream = CamGear(source=source, stream_mode=True, logging=False, **options).start()
+                        self.stream = CamGear(source=source, stream_mode=True, logging=False, backend=cv2.CAP_FFMPEG, **options).start()
                     else:
                         self.cap = cv2.VideoCapture(target_source)
             else:

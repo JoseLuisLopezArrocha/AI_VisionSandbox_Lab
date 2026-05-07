@@ -3,8 +3,21 @@ Punto de Entrada Principal - Visión AI Engine.
 Inicia la aplicación desde el paquete profesional 'app'.
 """
 
+import os
+import warnings
+import logging
+
+# Silenciar avisos de deprecación internos de librerías (ej. torch/pynvml)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# Silenciar logs ruidosos de vidgear antes de cualquier importación que lo use
+os.environ["VIDGEAR_LOGGING"] = "OFF"
+logging.getLogger("vidgear").setLevel(logging.ERROR)
+logging.getLogger("vidgear").disabled = True
+
 import sys
 import traceback
+import cv2
 
 def check_python_version():
     """Verifica que la versión de Python sea compatible."""

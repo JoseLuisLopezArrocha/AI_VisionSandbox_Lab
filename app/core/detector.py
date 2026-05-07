@@ -7,22 +7,12 @@ import os
 import cv2
 import numpy as np
 import json
-import shutil
 from ultralytics import YOLO, RTDETR
 from .hardware import HardwareManager
 from ..utils.helpers import MODELS_DIR, log_error
 
 # Directorio de modelos especializados
 CUSTOM_MODELS_DIR = os.path.join(MODELS_DIR, "custom")
-
-# Escalas predefinidas para hints
-SCALE_MAP = {
-    "n": "Nano — Ultrarrápido",
-    "s": "Small — Equilibrado",
-    "m": "Medium — Avanzado",
-    "l": "Large — Alta precisión",
-    "x": "eXtra Large — Máxima precisión"
-}
 
 class ObjectDetector:
     """
@@ -246,8 +236,6 @@ class ObjectDetector:
                         "zone_indices": zone_indices, "bbox": (int(x1), int(y1), int(x2), int(y2)),
                     })
             
-            # Procesar modelos custom (simplificado para brevedad, igual que original)
-            # ...
             return annotated, detections
         except Exception as e:
             log_error("EXE-COR-DET-02", f"Error durante la detección: {e}")

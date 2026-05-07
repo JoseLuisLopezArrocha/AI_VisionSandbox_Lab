@@ -36,3 +36,6 @@ scratch/
 .agents/
 temp/
 tmp/
+
+# Documentación local
+CHECKLIST_PROYECTO.md
