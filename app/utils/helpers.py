@@ -78,8 +78,8 @@ def get_next_capture_filename(class_name, dataset_dir):
         log_error("EXE-UTL-HELP-02", f"Error generando nombre captura: {e}")
         return f"{class_name}_error"
 
-def save_app_config(source_url, zones, target_classes):
-    """Guarda la configuración de zonas y filtros."""
+def save_app_config(source_url, zones, target_classes, dashboard_config=None):
+    """Guarda la configuración de zonas, filtros y dashboard modular."""
     try:
         data = {}
         if os.path.exists(ZONES_CONFIG):
@@ -88,14 +88,15 @@ def save_app_config(source_url, zones, target_classes):
 
         data[source_url] = {
             "zones": zones,
-            "target_classes": target_classes
+            "target_classes": target_classes,
+            "dashboard_config": dashboard_config
         }
 
         with open(ZONES_CONFIG, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
-        log_error("EXE-UTL-HELP-02", f"Error al guardar config de zonas: {e}")
+        log_error("EXE-UTL-HELP-02", f"Error al guardar config persistente: {e}")
         return False
 
 def load_app_config(source_url):

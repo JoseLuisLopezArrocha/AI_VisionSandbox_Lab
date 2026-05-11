@@ -9,6 +9,59 @@
 
 ---
 
+> [!IMPORTANT]
+> **Compatibilidad de Modelos:** Esta aplicación está construida sobre el ecosistema de **Ultralytics**. Por tanto, **solo es compatible con modelos en formato `.pt`** que sigan la arquitectura de Ultralytics (YOLOv8, YOLOv10, YOLOv11, RT-DETR, YOLO-World). Otros formatos como `.pth` (PyTorch puro), `.bin` o pesos de otras librerías no funcionarán directamente a menos que se exporten primero al formato compatible.
+
+---
+
+## 🚀 Guía de Instalación Rápida
+
+Sigue estos pasos según tu sistema operativo para poner en marcha el laboratorio:
+
+### 1. Requisitos Previos Generales
+*   **Python:** Se requiere la versión **3.12.x** para máxima compatibilidad y rendimiento.
+    *   [Descargar Python 3.12.x](https://www.python.org/downloads/release/python-3127/) (Asegúrate de marcar "Add Python to PATH" en el instalador de Windows).
+*   **Git:** Necesario para clonar el proyecto.
+    *   [Descargar Git](https://git-scm.com/downloads)
+
+### 2. Clonar y Configurar
+
+Abre una terminal y ejecuta:
+
+```bash
+# Clonar el repositorio
+git clone https://github.com/tu-usuario/02-Proyecto-Vision-Streaming.git
+cd 02-Proyecto-Vision-Streaming
+
+# Crear entorno virtual
+python -m venv venv
+```
+
+### 3. Instalación de Dependencias
+
+#### 🪟 Windows
+```powershell
+.\venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+#### 🐧 Linux / 🍎 macOS
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+# En Linux, podrías necesitar dependencias de sistema para OpenCV:
+# sudo apt-get update && sudo apt-get install libgl1
+```
+
+### 4. Ejecución
+
+```bash
+# Ejecutar la aplicación
+python main.py
+```
+
+---
+
 ## Funcionalidades Principales
 
 > [!NOTE]
@@ -180,20 +233,6 @@ Todas estas credenciales tambien se pueden configurar desde el boton de **Ajuste
 - **Persistencia SQLite Optimizada:** Modo WAL, connection pooling y batch inserts para rendimiento de escritura.
 
 ---
-
-## Inicio Rapido
-
-Para evitar errores de tipo `ModuleNotFoundError` (como `customtkinter`), asegurate de ejecutar el proyecto utilizando el entorno virtual pre-configurado:
-
-### Windows (PowerShell)
-```powershell
-.\venv\Scripts\python main.py
-```
-
-### Windows (CMD)
-```cmd
-venv\Scripts\python main.py
-```
 
 ---
 

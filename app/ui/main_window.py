@@ -152,7 +152,8 @@ class VisionApp(ctk.CTk):
         self.zones = []
         self.current_zone = []
         self.is_drawing_zone = False
-        self.target_classes = None
+        self.target_classes = None  # Lista de IDs (int) a detectar (M1)
+        self.target_classes_m2 = None # Lista de IDs (int) a detectar (M2)
         self.heatmap_enabled = False
         self.heatmap_acc = None
         self.conf_threshold = 0.35
@@ -171,6 +172,16 @@ class VisionApp(ctk.CTk):
         self.session_class_counts = Counter()
         self.session_zone_data = {} # {idx: {"ids": set(), "counts": Counter()}}
         self.bar_chart_mode = 'General'
+        self.dashboard_config = {
+            "show_top_5": True,
+            "pinned_classes": [],
+            "chart_type": "vbar", # 'vbar', 'hbar', 'line'
+            "axis_x": "class",    # 'class', 'zone', 'time'
+            "axis_y": "count",    # 'count', 'cumulative', 'conf'
+            "chart_mode": "live",
+            "metric_primary": "total_unique"
+        }
+        self.chart_history = [] # Buffer para series temporales: [(timestamp, detections, zone_counts), ...]
         self.data_logger = DataLogger()
         self.event_engine = EventEngine()
         self.detector = ObjectDetector()
@@ -252,24 +263,42 @@ class VisionApp(ctk.CTk):
         ctk.CTkButton(right_menu, image=self.icons.get('settings'), text='', width=35, height=26, fg_color='#1e293b', hover_color='#334155', command=self.open_settings, corner_radius=0).pack(side='left', padx=5)
 
     def _build_sidebar(self):
-        """Construye el panel lateral compacto y estático (Sin Scroll)."""
-        self.grid_columnconfigure(0, weight=0, minsize=280)
+        """Construye el panel lateral con scroll mejorado y diseño compacto."""
+        self.grid_columnconfigure(0, weight=0, minsize=340) # Aumentado a 340 para evitar cortes
         self.grid_columnconfigure(1, weight=1)
-        self.sidebar = ctk.CTkFrame(self, width=280, corner_radius=0)
+        self.sidebar = ctk.CTkFrame(self, width=340, corner_radius=0)
         self.sidebar.grid(row=1, column=0, rowspan=2, sticky='nsew')
         self.sidebar.grid_propagate(False)
-        header_frame = ctk.CTkFrame(self.sidebar, fg_color='transparent', height=10, corner_radius=0)
-        header_frame.pack(pady=(5, 5), padx=20, fill='x')
+        # Footer fijo abajo (empaquetado primero)
+        bottom = ctk.CTkFrame(self.sidebar, fg_color='transparent', corner_radius=0)
+        bottom.pack(side='bottom', fill='x', padx=20, pady=(4, 10))
+        self.hw_label = ctk.CTkLabel(bottom, text=f"{self.detector.hardware_diag['gpu_name'][:20]} | {self.detector.hardware_diag['best_backend'].upper()}", font=ctk.CTkFont(size=10), text_color='#10b981', corner_radius=0)
+        self.hw_label.pack(fill='x', pady=(0, 2))
+        self.antigravity_btn = ctk.CTkLabel(bottom, text='Antigravity System', font=ctk.CTkFont(size=10, slant='italic'), text_color='#059669', cursor='hand2', corner_radius=0)
+        self.antigravity_btn.pack(fill='x')
+        self.antigravity_btn.bind('<Button-1>', lambda e: webbrowser.open('https://antigravity.google'))
+        # Cuerpo scrollable (Ajustado para evitar cortes laterales)
+        self.sidebar_body = ctk.CTkScrollableFrame(self.sidebar, fg_color='transparent', corner_radius=0, scrollbar_button_color='#1e293b', scrollbar_button_hover_color='#334155')
+        self.sidebar_body.pack(fill='both', expand=True, padx=2)
+        sb = self.sidebar_body
+        header_frame = ctk.CTkFrame(sb, fg_color='transparent', height=10, corner_radius=0)
+        header_frame.pack(pady=(5, 5), padx=10, fill='x')
         self._section('MODELO IA')
-        ctk.CTkButton(self.sidebar, text=' NUEVO MODELO', image=self.icons.get('models'), command=lambda: ModelExplorerWindow(self, self.detector), height=34, fg_color='#3b82f6', hover_color='#2563eb', text_color='#ffffff', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(0, 10), padx=20, fill='x')
-        self.no_model_selector = ctk.CTkSegmentedButton(self.sidebar, values=['DESACTIVAR IA'], command=lambda _: self._on_no_model_click(), height=30, fg_color='#1e293b', selected_color='#10b981', corner_radius=0)
-        self.no_model_selector.pack(pady=(0, 8), padx=20, fill='x')
+        ctk.CTkButton(self.sidebar_body, text=' NUEVO MODELO', image=self.icons.get('models'), command=lambda: ModelExplorerWindow(self, self.detector), height=34, fg_color='#3b82f6', hover_color='#2563eb', text_color='#ffffff', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(0, 10), padx=15, fill='x')
+        self.no_model_selector = ctk.CTkButton(self.sidebar_body, text='DESACTIVAR IA', command=self._on_no_model_click, height=30, fg_color='#1e293b', hover_color='#7f1d1d', text_color='#ef4444', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0)
+        self.no_model_selector.pack(pady=(0, 10), padx=15, fill='x')
+        
         families = list(self.detector.architectures.keys())
-        self.model_selector = ctk.CTkSegmentedButton(self.sidebar, values=families, command=self._on_family_change, height=28, fg_color='#1e293b', selected_color='#3b82f6', corner_radius=0)
-        self.model_selector.pack(pady=(0, 6), padx=20, fill='x')
-        self.scale_selector = ctk.CTkSegmentedButton(self.sidebar, command=self._on_config_change, height=28, fg_color='#1e293b', selected_color='#3b82f6', corner_radius=0)
-        self.scale_selector.pack(pady=(0, 8), padx=20, fill='x')
-        self.world_prompt_frame = ctk.CTkFrame(self.sidebar, fg_color='#1e293b', border_width=1, border_color='#059669', corner_radius=0)
+        ctk.CTkLabel(self.sidebar_body, text='ARQUITECTURA:', font=ctk.CTkFont(size=9, weight='bold'), text_color='#64748b', corner_radius=0).pack(padx=15, anchor='w')
+        self.model_selector = ctk.CTkComboBox(self.sidebar_body, values=families, command=self._on_family_change, height=28, fg_color='#0f172a', border_color='#334155', button_color='#3b82f6', corner_radius=0)
+        self.model_selector.pack(pady=(2, 6), padx=15, fill='x')
+        self.model_selector.set('Seleccionar...')
+        
+        ctk.CTkLabel(self.sidebar_body, text='ESCALA / OPTIMIZACIÓN:', font=ctk.CTkFont(size=9, weight='bold'), text_color='#64748b', corner_radius=0).pack(padx=15, anchor='w')
+        self.scale_selector = ctk.CTkComboBox(self.sidebar_body, values=[], command=self._on_config_change, height=28, fg_color='#0f172a', border_color='#334155', button_color='#3b82f6', corner_radius=0)
+        self.scale_selector.pack(pady=(2, 10), padx=15, fill='x')
+        self.scale_selector.set('')
+        self.world_prompt_frame = ctk.CTkFrame(self.sidebar_body, fg_color='#1e293b', border_width=1, border_color='#059669', corner_radius=0)
         ctk.CTkLabel(self.world_prompt_frame, text='BÚSQUEDA UNIVERSAL AI', font=ctk.CTkFont(size=10, weight='bold'), text_color='#059669', corner_radius=0).pack(pady=(2, 0))
         w_row = ctk.CTkFrame(self.world_prompt_frame, fg_color='transparent', corner_radius=0)
         w_row.pack(fill='x', padx=5, pady=5)
@@ -277,31 +306,69 @@ class VisionApp(ctk.CTk):
         self.world_entry.pack(side='left', fill='x', expand=True, padx=(0, 2))
         self.world_entry.bind('<Return>', lambda _: self.apply_world_prompt())
         ctk.CTkButton(w_row, text='OK', width=40, height=26, fg_color='#059669', hover_color='#047857', text_color='#000', font=ctk.CTkFont(size=10, weight='bold'), command=self.apply_world_prompt, corner_radius=0).pack(side='right')
+        # --- MODELO SECUNDARIO (M2) --- Sección colapsable
+        self.m2_section_frame = ctk.CTkFrame(self.sidebar_body, fg_color='transparent', corner_radius=0)
+        self.m2_section_frame.pack(pady=(5, 0), padx=15, fill='x')
+        ctk.CTkLabel(self.m2_section_frame, text='MODELO SECUNDARIO (M2)', font=ctk.CTkFont(size=10, weight='bold'), text_color='#f59e0b', corner_radius=0).pack(anchor='w')
+        self.m2_toggle_btn = ctk.CTkButton(self.m2_section_frame, text='ACTIVAR M2', command=self._on_m2_toggle, height=26, fg_color='#1e293b', hover_color='#334155', border_width=1, border_color='#f59e0b', text_color='#f59e0b', font=ctk.CTkFont(size=10, weight='bold'), corner_radius=0)
+        self.m2_toggle_btn.pack(pady=(4, 4), fill='x')
+        self.m2_controls_frame = ctk.CTkFrame(self.m2_section_frame, fg_color='#1e293b', border_width=1, border_color='#f59e0b', corner_radius=0)
+        # Selectores M2 (ocultos inicialmente)
+        families_m2 = list(self.detector.architectures.keys())
+        self.m2_family_selector = ctk.CTkComboBox(self.m2_controls_frame, values=families_m2, command=self._on_m2_family_change, height=26, fg_color='#0f172a', border_color='#f59e0b', button_color='#f59e0b', corner_radius=0)
+        self.m2_family_selector.pack(pady=(6, 4), padx=8, fill='x')
+        self.m2_scale_selector = ctk.CTkComboBox(self.m2_controls_frame, command=self._on_m2_config_change, height=26, fg_color='#0f172a', border_color='#f59e0b', button_color='#f59e0b', corner_radius=0)
+        self.m2_scale_selector.pack(pady=(0, 4), padx=8, fill='x')
+        self.m2_status_label = ctk.CTkLabel(self.m2_controls_frame, text='Sin modelo M2', font=ctk.CTkFont(size=9), text_color='#94a3b8', corner_radius=0)
+        self.m2_status_label.pack(pady=(0, 2))
+        self.m2_filter_btn = ctk.CTkButton(self.m2_controls_frame, text='Filtro Clases M2', command=lambda: self.open_class_filter(is_secondary=True), height=22, fg_color='#0f172a', hover_color='#1e293b', border_width=1, border_color='#f59e0b', text_color='#f59e0b', font=ctk.CTkFont(size=9, weight='bold'), corner_radius=0)
+        self.m2_filter_btn.pack(pady=(0, 6), padx=8, fill='x')
+        self.m2_active = False  # Estado del toggle M2
         self._section('ANÁLISIS TÁCTICO')
-        self.conf_slider = ctk.CTkSlider(self.sidebar, from_=0.01, to=0.99, number_of_steps=98, command=self._on_conf_change, corner_radius=0)
+        
+        # Confianza (Umbral)
+        conf_frame = ctk.CTkFrame(self.sidebar_body, fg_color='transparent', corner_radius=0)
+        conf_frame.pack(pady=(2, 8), padx=15, fill='x')
+        
+        ctk.CTkLabel(conf_frame, text='🔍 UMBRAL DE DETECCIÓN (Confianza)', font=ctk.CTkFont(size=10, weight='bold'), text_color='#3b82f6', corner_radius=0).pack(anchor='w')
+        self.conf_slider = ctk.CTkSlider(conf_frame, from_=0.01, to=0.99, number_of_steps=98, command=self._on_conf_change, height=18, fg_color='#1e293b', progress_color='#3b82f6', button_color='#60a5fa', button_hover_color='#93c5fd', corner_radius=0)
         self.conf_slider.set(0.35)
-        self.conf_slider.pack(pady=(0, 2), padx=20, fill='x')
-        self.conf_label = ctk.CTkLabel(self.sidebar, text='Confianza: 35%', font=ctk.CTkFont(size=11), corner_radius=0)
-        self.conf_label.pack(pady=(0, 6), padx=20, anchor='w')
-        self.interval_slider = ctk.CTkSlider(self.sidebar, from_=0.0, to=5.0, number_of_steps=50, command=self._on_interval_change, corner_radius=0)
+        self.conf_slider.pack(pady=(4, 2), fill='x')
+        
+        conf_labels = ctk.CTkFrame(conf_frame, fg_color='transparent', corner_radius=0)
+        conf_labels.pack(fill='x')
+        ctk.CTkLabel(conf_labels, text='MIN (1%)', font=ctk.CTkFont(size=8), text_color='#475569', corner_radius=0).pack(side='left')
+        self.conf_label = ctk.CTkLabel(conf_labels, text='35%', font=ctk.CTkFont(size=11, weight='bold'), text_color='#3b82f6', corner_radius=0)
+        self.conf_label.pack(side='right')
+        
+        # Intervalo (Muestreo)
+        time_frame = ctk.CTkFrame(self.sidebar_body, fg_color='transparent', corner_radius=0)
+        time_frame.pack(pady=(4, 8), padx=15, fill='x')
+        
+        ctk.CTkLabel(time_frame, text='⏱ FRECUENCIA DE MUESTREO', font=ctk.CTkFont(size=10, weight='bold'), text_color='#10b981', corner_radius=0).pack(anchor='w')
+        self.interval_slider = ctk.CTkSlider(time_frame, from_=0.0, to=5.0, number_of_steps=50, command=self._on_interval_change, height=18, fg_color='#1e293b', progress_color='#10b981', button_color='#34d399', button_hover_color='#6ee7b7', corner_radius=0)
         self.interval_slider.set(self.infer_interval)
-        self.interval_slider.pack(pady=(2, 2), padx=20, fill='x')
-        self.interval_label = ctk.CTkLabel(self.sidebar, text=f'Muestreo: {self.infer_interval:.1f}s', font=ctk.CTkFont(size=11), corner_radius=0)
-        self.interval_label.pack(pady=(0, 6), padx=20, anchor='w')
-        f_row = ctk.CTkFrame(self.sidebar, fg_color='transparent', corner_radius=0)
-        f_row.pack(fill='x', padx=20, pady=(5, 10))
-        self.heatmap_switch = ctk.CTkSwitch(f_row, text='Mapa de Calor', command=self._toggle_heatmap, progress_color='#10b981', corner_radius=0)
+        self.interval_slider.pack(pady=(4, 2), fill='x')
+        
+        time_labels = ctk.CTkFrame(time_frame, fg_color='transparent', corner_radius=0)
+        time_labels.pack(fill='x')
+        ctk.CTkLabel(time_labels, text='MÁX (FPS)', font=ctk.CTkFont(size=8), text_color='#475569', corner_radius=0).pack(side='left')
+        self.interval_label = ctk.CTkLabel(time_labels, text=f'{self.infer_interval:.1f}s', font=ctk.CTkFont(size=11, weight='bold'), text_color='#10b981', corner_radius=0)
+        self.interval_label.pack(side='right')
+        f_row = ctk.CTkFrame(self.sidebar_body, fg_color='transparent', corner_radius=0)
+        f_row.pack(fill='x', padx=15, pady=(5, 10))
+        self.heatmap_switch = ctk.CTkSwitch(f_row, text='Mapa de Calor', command=self._toggle_heatmap, progress_color='#10b981', corner_radius=0, font=ctk.CTkFont(size=11))
         self.heatmap_switch.pack(side='left')
-        ctk.CTkButton(f_row, text='Filtro de Clases', fg_color='#3b82f6', hover_color='#2563eb', command=self.open_class_filter, height=28, corner_radius=0).pack(side='right', fill='x', expand=True, padx=(10, 0))
-        z_btns = ctk.CTkFrame(self.sidebar, fg_color='transparent', corner_radius=0)
-        z_btns.pack(pady=(5, 5), padx=20, fill='x')
+        ctk.CTkButton(f_row, text='Filtro Clases', fg_color='#3b82f6', hover_color='#2563eb', command=self.open_class_filter, height=26, width=100, font=ctk.CTkFont(size=10, weight='bold'), corner_radius=0).pack(side='right')
+        z_btns = ctk.CTkFrame(self.sidebar_body, fg_color='transparent', corner_radius=0)
+        z_btns.pack(pady=(5, 5), padx=15, fill='x')
         self.draw_btn = ctk.CTkButton(z_btns, text='DELIMITAR ZONAS', command=self.toggle_zone_drawing, width=110, height=32, fg_color='#1e293b', border_width=1, border_color='#334155', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0)
         self.draw_btn.pack(side='left', padx=0, fill='x', expand=True)
         ctk.CTkButton(z_btns, text='BORRAR ZONAS', command=self.clear_zones, fg_color='#450a0a', hover_color='#7f1d1d', height=32, font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(side='left', fill='x', expand=True, padx=0)
-        ctk.CTkButton(self.sidebar, text=' GESTOR DE EVENTOS / ALERTAS', image=self.icons.get('alerts'), command=self.open_events_config, height=34, fg_color='#f59e0b', hover_color='#d97706', text_color='#0f172a', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(5, 10), padx=20, fill='x')
+        ctk.CTkButton(self.sidebar_body, text=' GESTOR DE EVENTOS / ALERTAS', image=self.icons.get('alerts'), command=self.open_events_config, height=34, fg_color='#f59e0b', hover_color='#d97706', text_color='#0f172a', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(5, 10), padx=15, fill='x')
         self._section('CONTROL DE CAPTURA')
-        cap_frame = ctk.CTkFrame(self.sidebar, fg_color='#1e293b', border_width=1, border_color='#334155', corner_radius=0)
-        cap_frame.pack(pady=(0, 10), padx=20, fill='x')
+        cap_frame = ctk.CTkFrame(self.sidebar_body, fg_color='#1e293b', border_width=1, border_color='#334155', corner_radius=0)
+        cap_frame.pack(pady=(0, 10), padx=15, fill='x')
         ds_row = ctk.CTkFrame(cap_frame, fg_color='transparent', corner_radius=0)
         ds_row.pack(fill='x', padx=10, pady=(10, 5))
         self.capture_entry = ctk.CTkEntry(ds_row, placeholder_text='Dataset', height=28, border_width=1, border_color='#334155', corner_radius=0)
@@ -322,16 +389,13 @@ class VisionApp(ctk.CTk):
         ctk.CTkLabel(auto_frame, text='s', font=ctk.CTkFont(size=10), text_color='#64748b', corner_radius=0).pack(side='left')
         self.auto_capture_btn = ctk.CTkButton(auto_frame, text='INICIAR', width=60, height=24, fg_color='#10b981', hover_color='#059669', font=ctk.CTkFont(size=10, weight='bold'), command=self.toggle_auto_capture, corner_radius=0)
         self.auto_capture_btn.pack(side='right', padx=5)
-        bottom = ctk.CTkFrame(self.sidebar, fg_color='transparent', corner_radius=0)
-        bottom.pack(side='bottom', fill='x', padx=20, pady=(4, 15))
-        self.hw_label = ctk.CTkLabel(bottom, text=f"{self.detector.hardware_diag['gpu_name'][:20]} | {self.detector.hardware_diag['best_backend'].upper()}", font=ctk.CTkFont(size=10), text_color='#10b981', corner_radius=0)
-        self.hw_label.pack(fill='x', pady=(0, 2))
-        self.antigravity_btn = ctk.CTkLabel(bottom, text='Antigravity System', font=ctk.CTkFont(size=10, slant='italic'), text_color='#059669', cursor='hand2', corner_radius=0)
-        self.antigravity_btn.pack(fill='x')
-        self.antigravity_btn.bind('<Button-1>', lambda e: webbrowser.open('https://antigravity.google'))
+        self.sidebar_body._parent_canvas.configure(highlightthickness=0) # Eliminar borde de canvas interno
+        self.sidebar_body._scrollbar.grid_configure(padx=(2, 0)) # Ajustar scrollbar
+
 
     def _section(self, text):
-        ctk.CTkLabel(self.sidebar, text=text, font=ctk.CTkFont(size=12, weight='bold'), text_color='#94a3b8', corner_radius=0).pack(pady=(15, 6), padx=20, anchor='w')
+        target = self.sidebar_body if hasattr(self, 'sidebar_body') else self.sidebar
+        ctk.CTkLabel(target, text=text, font=ctk.CTkFont(size=12, weight='bold'), text_color='#94a3b8', corner_radius=0).pack(pady=(12, 6), padx=15, anchor='w')
 
     def _build_bottom_dashboard(self):
         """Dashboard horizontal para analítica y logs."""
@@ -365,7 +429,13 @@ class VisionApp(ctk.CTk):
         self.bar_canvas.pack(fill='both', expand=True)
         self.telemetry_frame = ctk.CTkFrame(self.dash, height=140, fg_color='#111', corner_radius=0)
         self.telemetry_frame.grid(row=0, column=2, padx=10, pady=15, sticky='nsew')
-        ctk.CTkLabel(self.telemetry_frame, text='RESUMEN DE SESION', font=ctk.CTkFont(size=9, weight='bold'), text_color='#444', corner_radius=0).pack(pady=(10, 5))
+        
+        # Cabecera de Telemetría con botón de ajuste
+        tel_header = ctk.CTkFrame(self.telemetry_frame, fg_color='transparent', corner_radius=0)
+        tel_header.pack(fill='x', pady=(10, 5))
+        ctk.CTkLabel(tel_header, text='RESUMEN DE SESION', font=ctk.CTkFont(size=9, weight='bold'), text_color='#444', corner_radius=0).pack(side='left', padx=10)
+        self.btn_dash_cfg = ctk.CTkButton(tel_header, text='CONFIG', width=45, height=18, font=ctk.CTkFont(size=8, weight='bold'), fg_color='#1e293b', hover_color='#334155', command=self._open_dashboard_settings, corner_radius=0)
+        self.btn_dash_cfg.pack(side='right', padx=10)
         self.total_ever_label = ctk.CTkLabel(self.telemetry_frame, text='0', font=ctk.CTkFont(size=32, weight='bold'), text_color='#10b981', corner_radius=0)
         self.total_ever_label.pack()
         ctk.CTkLabel(self.telemetry_frame, text='TOTAL DETECTADOS', font=ctk.CTkFont(size=9, weight='bold'), text_color='#64748b', corner_radius=0).pack(pady=(0, 10))
@@ -408,6 +478,8 @@ class VisionApp(ctk.CTk):
         self.canvas.grid(row=0, column=0, sticky='nsew')
         self.canvas.bind('<Button-1>', self._on_video_click)
         self.canvas.bind('<Button-3>', self._on_video_right_click)
+        self.canvas.bind('<Double-Button-1>', self._on_video_double_click)
+        self.fullscreen_window = None  # Referencia a la ventana fullscreen
         self.controls = ctk.CTkFrame(inner, fg_color='transparent', height=50, corner_radius=0)
         self.controls.grid(row=1, column=0, sticky='ew', padx=20, pady=(10, 20))
         self.rewind_btn = ctk.CTkButton(self.controls, image=self.icons.get('back'), text='', width=40, height=32, fg_color='#1e293b', hover_color='#334155', command=lambda: self.engine.seek_back(5), corner_radius=0)
@@ -445,6 +517,7 @@ class VisionApp(ctk.CTk):
             self.last_infer_time = now
             threading.Thread(target=self.run_inference, args=(self.raw_frame.copy(),), daemon=True).start()
         has_layers = bool(self.zones or self.heatmap_enabled or self.is_drawing_zone)
+        is_dual = self.detector.is_dual_mode()
         if self.detector.model is None:
             display = self.raw_frame.copy() if has_layers else self.raw_frame
             self.annotated_frame = None
@@ -456,6 +529,13 @@ class VisionApp(ctk.CTk):
                 else:
                     display = self.raw_frame.copy()
         if display is not None:
+            # Dibujar leyenda Dual Mode sobre el frame
+            if is_dual:
+                display = VisualPainter.draw_model_legend(
+                    display,
+                    self.detector.active_name,
+                    self.detector.secondary_name
+                )
             if has_layers:
                 display = self._draw_zones_overlay(display)
                 if self.heatmap_enabled:
@@ -507,7 +587,9 @@ class VisionApp(ctk.CTk):
                 old = self.evidence_items.pop()
                 old.destroy()
         except Exception as e:
+            self.add_log(f'Error añadiendo evidencia UI: {e}')
             print(f'Error añadiendo evidencia UI: {e}')
+        self.evidence_scroll.update_idletasks()
 
     def _update_bar_mode_buttons(self):
         """Actualiza los botones de modo de la gráfica según las zonas disponibles."""
@@ -554,6 +636,60 @@ class VisionApp(ctk.CTk):
             self.canvas.itemconfig(self._canvas_img_id, image=img_tk)
             self.canvas.coords(self._canvas_img_id, w // 2, h // 2)
         self.canvas.image = img_tk
+        # Si hay ventana fullscreen abierta, actualizarla también
+        if self.fullscreen_window and self.fullscreen_window.winfo_exists():
+            self._update_fullscreen_frame(frame)
+
+    def _on_video_double_click(self, event):
+        """Abre/cierra la ventana de video en pantalla completa."""
+        if self.is_drawing_zone:
+            return  # No activar fullscreen mientras se dibujan zonas
+        if self.fullscreen_window and self.fullscreen_window.winfo_exists():
+            self.fullscreen_window.destroy()
+            self.fullscreen_window = None
+            return
+        self.fullscreen_window = tk.Toplevel(self)
+        self.fullscreen_window.attributes('-fullscreen', True)
+        self.fullscreen_window.overrideredirect(True) # Quitar bordes de ventana totalmente
+        self.fullscreen_window.configure(bg='black')
+        self.fullscreen_window.focus_force()
+        self.fullscreen_window.bind('<Escape>', lambda e: self._close_fullscreen())
+        self.fullscreen_window.bind('<Double-Button-1>', lambda e: self._close_fullscreen())
+        self.fs_canvas = tk.Canvas(self.fullscreen_window, bg='black', highlightthickness=0)
+        self.fs_canvas.pack(fill='both', expand=True)
+        self.fullscreen_window.update() # Forzar dibujado
+        self._fs_img_id = None
+        self.add_log('Pantalla completa real activada. ESC para salir.')
+
+    def _close_fullscreen(self):
+        """Cierra la ventana de pantalla completa."""
+        if self.fullscreen_window and self.fullscreen_window.winfo_exists():
+            self.fullscreen_window.destroy()
+            self.fullscreen_window = None
+            self._fs_img_id = None
+
+    def _update_fullscreen_frame(self, frame):
+        """Actualiza el frame en la ventana fullscreen."""
+        try:
+            if not self.fullscreen_window or not self.fullscreen_window.winfo_exists():
+                return
+            w = self.fs_canvas.winfo_width()
+            h = self.fs_canvas.winfo_height()
+            if w < 50 or h < 50:
+                return
+            fh, fw = frame.shape[:2]
+            aspect = fw / fh
+            nw, nh = (w, int(w / aspect)) if w / h < aspect else (int(h * aspect), h)
+            resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+            img_tk = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)))
+            if not hasattr(self, '_fs_img_id') or self._fs_img_id is None:
+                self._fs_img_id = self.fs_canvas.create_image(w // 2, h // 2, image=img_tk, anchor='center')
+            else:
+                self.fs_canvas.itemconfig(self._fs_img_id, image=img_tk)
+                self.fs_canvas.coords(self._fs_img_id, w // 2, h // 2)
+            self.fs_canvas.image = img_tk
+        except Exception:
+            pass
 
     def run_inference(self, frame):
         """Gestiona el hilo de inferencia y actualiza el estado de detección."""
@@ -561,8 +697,10 @@ class VisionApp(ctk.CTk):
         self.is_inferencing = True
         try:
             t_classes = None if self.locked_track_id is not None else self.target_classes
-            ann, all_detections = self.detector.detect(frame, target_classes=t_classes, zones=self.zones, conf_threshold=self.conf_threshold)
+            t_classes_m2 = self.target_classes_m2
+            ann, all_detections = self.detector.detect(frame, target_classes=t_classes, target_classes_secondary=t_classes_m2, zones=self.zones, conf_threshold=self.conf_threshold)
             self.last_detections = all_detections
+            is_dual = self.detector.is_dual_mode()
             if self.locked_track_id is not None:
                 detections = [d for d in all_detections if d.get('track_id') == self.locked_track_id]
                 if not detections:
@@ -572,11 +710,15 @@ class VisionApp(ctk.CTk):
                         self.add_log('Focus Mode deshabilitado (Objetivo perdido).')
                 else:
                     self.focus_lost_cnt = 0
-                    ann = VisualPainter.draw_detections(frame.copy(), detections, is_focus=True)
-            elif self.target_classes is not None:
-                detections = [d for d in all_detections if d.get('class_id') in self.target_classes]
+                    ann = VisualPainter.draw_detections(frame.copy(), detections, is_focus=True, dual_mode=is_dual)
+            elif self.target_classes is not None or self.target_classes_m2 is not None:
+                detections = all_detections
+                # Anotar frame con detecciones ya filtradas por el detector
+                ann = VisualPainter.draw_detections(ann, all_detections, dual_mode=is_dual, show_trails=False)
             else:
                 detections = all_detections
+                # Anotar frame con todas las detecciones coloreadas por modelo (sin trails)
+                ann = VisualPainter.draw_detections(ann, all_detections, dual_mode=is_dual, show_trails=False)
             with self._render_lock:
                 self.annotated_frame = ann
             for d in detections:
@@ -600,10 +742,13 @@ class VisionApp(ctk.CTk):
             self.event_engine.update_cumulative_stats(detections)
 
             def on_evidence(img, msg, ok, raw_frame=None, zoom_frame=None):
-                self.after(0, lambda: self.add_evidence(img, msg, ok, raw_frame=raw_frame, zoom_frame=zoom_frame))
+                self.after(0, lambda i=img, m=msg, o=ok, rf=raw_frame, zf=zoom_frame: self.add_evidence(i, m, o, raw_frame=rf, zoom_frame=zf))
             self.event_engine.evaluate(detections, frame=frame, source=self.url, app_log_callback=self.add_log, evidence_callback=on_evidence)
             ms = int((time.time() - t_infer) * 1000)
-            self.after(0, lambda: self.infer_label.configure(text=f'INFERENCIA: {ms} ms'))
+            infer_text = f'INFERENCIA: {ms} ms'
+            if is_dual:
+                infer_text = f'DUAL INFERENCIA: {ms} ms'
+            self.after(0, lambda t=infer_text: self.infer_label.configure(text=t))
         finally:
             self.is_inferencing = False
 
@@ -709,12 +854,15 @@ class VisionApp(ctk.CTk):
         self.destroy()
 
     def _save_config(self):
-        save_app_config(self.url, self.zones, self.target_classes)
+        save_app_config(self.url, self.zones, self.target_classes, self.dashboard_config)
 
     def _load_config(self):
         cfg = load_app_config(self.url)
         if cfg:
             self.zones, self.target_classes = (cfg.get('zones', []), cfg.get('target_classes'))
+            saved_dash = cfg.get('dashboard_config')
+            if saved_dash:
+                self.dashboard_config.update(saved_dash)
             self._update_bar_mode_buttons()
 
     def _update_world_prompt_visibility(self, visible):
@@ -724,22 +872,22 @@ class VisionApp(ctk.CTk):
             self.world_prompt_frame.pack_forget()
 
     def _on_no_model_click(self):
-        """Desactiva la IA y limpia selecciones de modelos."""
-        self.no_model_selector.set('DESACTIVAR IA')
-        self.model_selector.set('')
+        """Desactiva la IA y limpia selecciones de modelos (primario y secundario)."""
+        self.model_selector.set('Seleccionar...')
         self.scale_selector.configure(values=[])
         self.scale_selector.set('')
         self.detector.model = None
         self.detector.active_name = None
+        # Limpiar también el modelo secundario
+        self.detector.clear_secondary_model()
+        self._deactivate_m2_ui()
         self.add_log('IA Desactivada. Renderizado en crudo.')
         self._update_world_prompt_visibility(False)
 
     def _on_family_change(self, family):
         """Actualiza el selector de escalas según la familia."""
-        if not family:
+        if not family or family == 'Seleccionar...':
             return
-        self.no_model_selector.set('')
-        self._update_world_prompt_visibility('world' in family.lower())
         scales = sorted(self.detector.architectures.get(family, {}).get('aliases', {}).keys())
         self.scale_selector.configure(values=scales)
         if scales:
@@ -762,9 +910,8 @@ class VisionApp(ctk.CTk):
         """Recarga el modelo con la nueva configuración de familia/escala."""
         family = self.model_selector.get()
         alias = self.scale_selector.get()
-        if not family or not alias:
+        if not family or not alias or family == 'Seleccionar...':
             return
-        self.no_model_selector.set('')
 
         def load():
             self.is_loading_model = True
@@ -778,6 +925,10 @@ class VisionApp(ctk.CTk):
                     def _update_ui():
                         self.hw_label.configure(text=f'PROCESAMIENTO: {backend} ({vendor})', text_color='#10b981')
                         self.add_log(f'Modelo {success} cargado correctamente.')
+                        
+                        # Actualizar visibilidad del prompt de búsqueda textual (Zero-Shot)
+                        self._update_world_prompt_visibility(self.detector.is_zero_shot_active)
+                        
                     self.after(0, _update_ui)
                 else:
 
@@ -791,25 +942,120 @@ class VisionApp(ctk.CTk):
                 self.is_loading_model = False
         threading.Thread(target=load, daemon=True).start()
 
+    # --- Modelo Secundario (M2) ---
+
+    def _on_m2_toggle(self):
+        """Alterna la activación del modelo secundario."""
+        if self.m2_active:
+            self._deactivate_m2_ui()
+            self.detector.clear_secondary_model()
+            self.add_log('[M2] Modelo secundario desactivado.')
+            self.hw_label.configure(text=f"{self.detector.hardware_diag['gpu_name'][:20]} | {self.detector.hardware_diag['best_backend'].upper()}", text_color='#10b981')
+        else:
+            self.m2_active = True
+            self.m2_toggle_btn.configure(text='DESACTIVAR M2', fg_color='#f59e0b', text_color='#0f172a', border_color='#f59e0b')
+            self.m2_controls_frame.pack(pady=(2, 6), fill='x')
+            self.m2_family_selector.set('Seleccionar...')
+            self.m2_scale_selector.configure(values=[])
+            self.m2_scale_selector.set('')
+            self.m2_status_label.configure(text='Selecciona familia y escala', text_color='#f59e0b')
+            self.add_log('[M2] Modo dual activado. Selecciona un modelo secundario.')
+
+    def _deactivate_m2_ui(self):
+        """Resetea la UI del M2 sin tocar el detector."""
+        self.m2_active = False
+        self.m2_toggle_btn.configure(text='ACTIVAR M2', fg_color='#1e293b', text_color='#f59e0b', border_color='#f59e0b')
+        self.m2_controls_frame.pack_forget()
+
+    def _on_m2_family_change(self, family):
+        """Actualiza escalas del M2 según la familia seleccionada."""
+        if not family:
+            return
+        scales = sorted(self.detector.architectures.get(family, {}).get('aliases', {}).keys())
+        self.m2_scale_selector.configure(values=scales)
+        if scales:
+            self.m2_scale_selector.set(scales[0])
+            self._on_m2_config_change()
+
+    def _on_m2_config_change(self, _=None):
+        """Carga el modelo secundario seleccionado."""
+        family = self.m2_family_selector.get()
+        alias = self.m2_scale_selector.get()
+        if not family or not alias or family == 'Seleccionar...':
+            return
+
+        def load_m2():
+            self.is_loading_model = True
+            try:
+                self.add_log(f'[M2] Cargando: {family} ({alias})...')
+                success = self.detector.change_secondary_model(family, alias)
+                if success:
+                    def _update_ui():
+                        self.m2_status_label.configure(text=f'✓ {success}', text_color='#10b981')
+                        self.hw_label.configure(text='DUAL MODE ACTIVO', text_color='#f59e0b')
+                        self.add_log(f'[M2] Modelo {success} cargado correctamente.')
+                    self.after(0, _update_ui)
+                else:
+                    def _update_err():
+                        self.m2_status_label.configure(text='Error cargando M2', text_color='#7f1d1d')
+                        self.add_log('[M2] Error: No se pudo cargar el modelo secundario.')
+                    self.after(0, _update_err)
+            except Exception as e:
+                self.add_log(f'[M2] Error en hilo de carga: {e}')
+            finally:
+                self.is_loading_model = False
+        threading.Thread(target=load_m2, daemon=True).start()
+
     def _on_model_added(self):
         self.model_selector.configure(values=list(self.detector.architectures.keys()))
 
-    def open_class_filter(self):
-        if not self.detector or not self.detector.model:
-            self.add_log('No hay un modelo cargado todavía.')
+    def open_class_filter(self, is_secondary=False):
+        detector_model = self.detector.secondary_model if is_secondary else self.detector.model
+        if not self.detector or not detector_model:
+            self.add_log(f"No hay un modelo {'secundario ' if is_secondary else ''}cargado todavía.")
             return
-        classes = self.detector.get_class_names()
-        self.add_log(f'Abriendo filtro: {len(classes)} clases detectadas en el modelo.')
-        ClassFilterWindow(self, self.detector, self.target_classes, self._on_filter_applied)
+        
+        # Obtener nombres de clases del modelo específico
+        names_dict = getattr(detector_model, 'names', {})
+        if not names_dict:
+            classes = {i: f"Clase {i}" for i in range(80)}
+        else:
+            classes = {int(k): str(v) for k, v in names_dict.items()}
+            
+        current_targets = self.target_classes_m2 if is_secondary else self.target_classes
+        label_prefix = "[M2] " if is_secondary else ""
+        
+        def on_applied(new_targets):
+            if is_secondary:
+                self.target_classes_m2 = new_targets
+                self.add_log(f"[M2] Filtro {'retirado' if new_targets is None else 'aplicado'}.")
+            else:
+                self._on_filter_applied(new_targets)
+        
+        self.add_log(f"Abriendo filtro {label_prefix}: {len(classes)} clases detectadas.")
+        ClassFilterWindow(self, self.detector, current_targets, on_applied, custom_classes=classes)
 
     def _on_filter_applied(self, new_targets):
         self.target_classes = new_targets
         self.annotated_frame = None
         if self.target_classes is None:
-            self.add_log('Filtro retirado: detectando todas las clases.')
+            self.add_log('Filtro M1 retirado: detectando todas las clases.')
         else:
-            self.add_log(f'Filtro aplicado: {len(self.target_classes)} clase(s) seleccionada(s).')
+            self.add_log(f'Filtro M1 aplicado: {len(self.target_classes)} clase(s).')
         self._save_config()
+
+    def _open_dashboard_settings(self):
+        from .components import DashboardSettingsWindow
+        # Obtener clases disponibles de los modelos cargados
+        all_classes = set()
+        if self.detector.model:
+            names = getattr(self.detector.model, 'names', {})
+            all_classes.update(names.values())
+        if self.detector.secondary_model:
+            names = getattr(self.detector.secondary_model, 'names', {})
+            all_classes.update(names.values())
+        
+        DashboardSettingsWindow(self, self.dashboard_config, sorted(list(all_classes)))
 
     def open_events_config(self):
         """Abre la ventana de configuración del motor de Hitos/Eventos."""
@@ -890,14 +1136,14 @@ class VisionApp(ctk.CTk):
 
     def _on_conf_change(self, value):
         self.conf_threshold = value
-        self.conf_label.configure(text=f'Confianza: {int(value * 100)}%')
+        self.conf_label.configure(text=f'{int(value * 100)}%')
 
     def _on_interval_change(self, value):
         self.infer_interval = value
         if value == 0:
-            self.interval_label.configure(text='Muestreo: Cada frame')
+            self.interval_label.configure(text='MAX FPS')
         else:
-            self.interval_label.configure(text=f'Muestreo: {value:.1f}s')
+            self.interval_label.configure(text=f'{value:.1f}s')
 
     def _toggle_heatmap(self):
         self.heatmap_enabled = self.heatmap_switch.get()

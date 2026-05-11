@@ -521,7 +521,7 @@ class AddModelPopup(ctk.CTkToplevel):
 class ClassFilterWindow(ctk.CTkToplevel):
     """Ventana modal para seleccionar las clases a detectar."""
 
-    def __init__(self, parent, detector, current_targets, on_apply):
+    def __init__(self, parent, detector, current_targets, on_apply, custom_classes=None):
         super().__init__(parent)
         self.title('Filtro de Clases')
         win_w, win_h = (420, 550)
@@ -532,10 +532,14 @@ class ClassFilterWindow(ctk.CTkToplevel):
         self.grab_set()
         self.detector = detector
         self.on_apply = on_apply
-        try:
-            self.all_classes = self.detector.get_class_names() if self.detector else {}
-        except Exception:
-            self.all_classes = {}
+        
+        if custom_classes is not None:
+            self.all_classes = custom_classes
+        else:
+            try:
+                self.all_classes = self.detector.get_class_names() if self.detector else {}
+            except Exception:
+                self.all_classes = {}
         self.checkbox_widgets = []
         self.checkboxes = {}
         self.selected_ids = set()
@@ -995,3 +999,87 @@ class CaptureNamePopup(ctk.CTkToplevel):
         if self.on_cancel:
             self.on_cancel()
         self.destroy()
+
+class DashboardSettingsWindow(ctk.CTkToplevel):
+    """Ventana para configurar la modularidad del dashboard analitico."""
+    
+    def __init__(self, parent, config, available_classes):
+        super().__init__(parent)
+        self.config = config
+        self.available_classes = available_classes
+        self.title('Ajustes de Analitica Modular')
+        self.geometry('450x550')
+        self.grab_set()
+        
+        # Estetica Industrial
+        header = ctk.CTkFrame(self, fg_color='#0f172a', height=60, corner_radius=0)
+        header.pack(fill='x')
+        ctk.CTkLabel(header, text='DISEÑO DE DASHBOARD TÁCTICO', font=ctk.CTkFont(size=14, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(pady=15)
+        
+        body = ctk.CTkFrame(self, fg_color='transparent', corner_radius=0)
+        body.pack(fill='both', expand=True, padx=20, pady=20)
+        
+        # SECCION 1: Tipo de Grafico y Ejes
+        ctk.CTkLabel(body, text='ARQUITECTURA DE DATOS', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w', pady=(0, 5))
+        
+        arch_frame = ctk.CTkFrame(body, fg_color='#1e293b', corner_radius=0)
+        arch_frame.pack(fill='x', pady=(0, 20), padx=5)
+        
+        # Tipo de grafico
+        row1 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
+        row1.pack(fill='x', padx=10, pady=5)
+        ctk.CTkLabel(row1, text='Tipo de Gráfico:', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
+        self.chart_type_var = ctk.StringVar(value=config.get("chart_type", "vbar"))
+        ctk.CTkOptionMenu(row1, values=['vbar', 'hbar', 'line'], variable=self.chart_type_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+        
+        # Eje X
+        row2 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
+        row2.pack(fill='x', padx=10, pady=5)
+        ctk.CTkLabel(row2, text='Eje X (Dato):', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
+        self.axis_x_var = ctk.StringVar(value=config.get("axis_x", "class"))
+        ctk.CTkOptionMenu(row2, values=['class', 'zone', 'time'], variable=self.axis_x_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+        
+        # Eje Y
+        row3 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
+        row3.pack(fill='x', padx=10, pady=5)
+        ctk.CTkLabel(row3, text='Eje Y (Métrica):', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
+        self.axis_y_var = ctk.StringVar(value=config.get("axis_y", "count"))
+        ctk.CTkOptionMenu(row3, values=['count', 'cumulative', 'conf'], variable=self.axis_y_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+
+        # SECCION 2: Resumen Lateral
+        ctk.CTkLabel(body, text='MÉTRICAS DE RESUMEN', font=ctk.CTkFont(size=11, weight='bold'), text_color='#94a3b8', corner_radius=0).pack(anchor='w', pady=(0, 5))
+        
+        metrics_frame = ctk.CTkFrame(body, fg_color='#1e293b', corner_radius=0)
+        metrics_frame.pack(fill='x', pady=(0, 20), padx=5)
+        
+        self.show_top_5_var = ctk.BooleanVar(value=config.get("show_top_5", True))
+        ctk.CTkCheckBox(metrics_frame, text='Mostrar Automáticamente TOP 5', variable=self.show_top_5_var, corner_radius=0).pack(anchor='w', padx=15, pady=10)
+        
+        # SECCION 3: Clases Pinedas (Fijas)
+        ctk.CTkLabel(body, text='CLASES FIJAS (PINNED)', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w', pady=(0, 5))
+        
+        self.scroll_classes = ctk.CTkScrollableFrame(body, height=120, fg_color='#0f172a', corner_radius=0)
+        self.scroll_classes.pack(fill='both', expand=True, padx=5)
+        
+        self.check_vars = {}
+        pinned = config.get("pinned_classes", [])
+        for cls_name in self.available_classes:
+            var = ctk.BooleanVar(value=cls_name in pinned)
+            chk = ctk.CTkCheckBox(self.scroll_classes, text=cls_name.upper(), variable=var, font=ctk.CTkFont(size=11), corner_radius=0)
+            chk.pack(anchor='w', padx=10, pady=4)
+            self.check_vars[cls_name] = var
+            
+        # BOTON GUARDAR
+        ctk.CTkButton(self, text='APLICAR CONFIGURACIÓN', command=self._save_and_close, height=45, fg_color='#10b981', hover_color='#059669', font=ctk.CTkFont(size=12, weight='bold'), corner_radius=0).pack(fill='x', padx=20, pady=20)
+
+    def _save_and_close(self):
+        self.config["chart_type"] = self.chart_type_var.get()
+        self.config["axis_x"] = self.axis_x_var.get()
+        self.config["axis_y"] = self.axis_y_var.get()
+        self.config["show_top_5"] = self.show_top_5_var.get()
+        self.config["pinned_classes"] = [cls for cls, var in self.check_vars.items() if var.get()]
+        
+        if hasattr(self.master, '_save_config'):
+            self.master._save_config()
+        self.destroy()
+

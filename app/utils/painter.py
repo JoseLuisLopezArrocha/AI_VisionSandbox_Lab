@@ -161,11 +161,32 @@ class VisualPainter:
                     app.uptime_label.configure(text=f"{hrs:02d}:{mins:02d}:{secs:02d}")
 
                 if hasattr(app, 'breakdown_label'):
-                    top = breakdown_source.most_common(5)
-                    if top:
-                        header = f"TOP 5 ÚNICOS ({mode.upper()}):"
-                        txt = header + "\n" + "\n".join([f"• {k.upper()}: {v}" for k, v in top])
-                        app.breakdown_label.configure(text=txt)
+                    cfg = getattr(app, 'dashboard_config', {})
+                    show_top = cfg.get("show_top_5", True)
+                    pinned = cfg.get("pinned_classes", [])
+                    
+                    lines = []
+                    
+                    # 1. Mostrar Pinned Classes (Siempre visibles)
+                    if pinned:
+                        lines.append("MÉTRICAS FIJAS:")
+                        for p_name in pinned:
+                            count = breakdown_source.get(p_name, 0)
+                            lines.append(f"• {p_name.upper()}: {count}")
+                        lines.append("") # Separador
+                    
+                    # 2. Mostrar Top 5 (Automático)
+                    if show_top:
+                        top = breakdown_source.most_common(5)
+                        if top:
+                            lines.append(f"TOP 5 ÚNICOS ({mode.upper()}):")
+                            for k, v in top:
+                                # Evitar duplicar si ya está en pinned
+                                if k not in pinned:
+                                    lines.append(f"• {k.upper()}: {v}")
+                    
+                    if lines:
+                        app.breakdown_label.configure(text="\n".join(lines))
                     else:
                         app.breakdown_label.configure(text=f"Sin datos en {mode}")
 
@@ -176,16 +197,14 @@ class VisualPainter:
                     VisualPainter.draw_bar_chart(app, app.bar_canvas, getattr(app, 'last_detections', []))
                 app._last_bar_draw = now
 
-            # Retornar conteos de zonas para el logger (esto sí cada frame si se requiere precisión)
-            zone_current_counts = []
-            if zones:
-                z_counts = Counter()
-                for d in detections:
-                    for zi in d.get("zone_indices", []):
-                        if zi >= 0: z_counts[zi] += 1
-                for i in range(len(zones)):
-                    zone_current_counts.append(z_counts[i])
-            
+            # 3. Mantener buffer de historial (Series Temporales)
+            if not hasattr(app, 'chart_history'): app.chart_history = []
+            if now - getattr(app, '_last_history_snapshot', 0) >= 1.0: # Cada segundo
+                app.chart_history.append((now, list(detections), zone_current_counts))
+                if len(app.chart_history) > 60: # Mantener 60 segundos
+                    app.chart_history.pop(0)
+                app._last_history_snapshot = now
+
             return zone_current_counts
         except Exception as e:
             # Fallo silencioso en métricas para no crashear el core
@@ -205,87 +224,118 @@ class VisualPainter:
 
     @staticmethod
     def draw_bar_chart(app, canvas, detections):
-        """Dibuja gráfico de barras interactivo con soporte de zonas."""
+        """Redirigido al nuevo motor de graficos modular."""
+        VisualPainter.draw_chart(app, canvas, detections)
+
+    @staticmethod
+    def draw_chart(app, canvas, detections):
+        """Motor de graficos avanzado: modular y configurable."""
         canvas.delete("all")
         w, h = canvas.winfo_width(), canvas.winfo_height()
         if w < 50 or h < 50: return
-
-        # --- FILTRADO POR MODO DE GRÁFICA (VIVO) ---
-        mode = getattr(app, 'bar_chart_mode', 'General')
         
-        if mode == "General":
-            # Modo General: todas las detecciones del frame
-            labels_map = {d['class_id']: d['label'] for d in detections}
-            counts = Counter([d['class_id'] for d in detections])
-        else:
-            # Modo Zona: solo detecciones del frame actual que estén en dicha zona
-            try:
-                zi = int(mode[1:]) - 1
-                filtered = [d for d in detections if zi in d.get("zone_indices", [])]
-                labels_map = {d['class_id']: d['label'] for d in filtered}
-                counts = Counter([d['class_id'] for d in filtered])
-            except:
-                counts = Counter()
-                labels_map = {}
-            
-        if not counts:
-            txt = "Sin detecciones" if mode == "General" else f"Sin datos en {mode}"
-            canvas.create_text(w/2, h/2, text=txt, fill="#444", font=("Arial", 10))
+        cfg = getattr(app, 'dashboard_config', {})
+        ctype = cfg.get("chart_type", "vbar")
+        ax_x = cfg.get("axis_x", "class")
+        ax_y = cfg.get("axis_y", "count")
+        
+        # --- 1. RECOLECCION DE DATOS SEGUN CONFIGURACION ---
+        data = [] # List of (label, value)
+        
+        if ax_x == "class":
+            # X = Clases. Y = Métrica elegida.
+            source = app.session_class_counts if ax_y == "cumulative" else Counter([d['label'] for d in detections])
+            if ax_y == "conf":
+                # Media de confianza por clase (en el frame actual)
+                conf_sums = Counter()
+                conf_counts = Counter()
+                for d in detections:
+                    conf_sums[d['label']] += d.get('confidence', 0)
+                    conf_counts[d['label']] += 1
+                data = [(k, conf_sums[k]/conf_counts[k]) for k in conf_sums]
+            else:
+                data = sorted(source.items(), key=lambda x: x[1], reverse=True)[:6]
+        
+        elif ax_x == "zone":
+            # X = Zonas. Y = Métrica elegida.
+            zones_count = len(app.zones) if hasattr(app, 'zones') else 0
+            for i in range(zones_count):
+                label = f"Z{i+1}"
+                if ax_y == "cumulative":
+                    val = len(app.session_zone_data.get(i, {"ids": set()})["ids"])
+                else:
+                    val = sum(1 for d in detections if i in d.get("zone_indices", []))
+                data.append((label, val))
+        
+        elif ax_x == "time":
+            # Caso especial: Serie temporal (solo util para linea)
+            if not getattr(app, 'chart_history', []): 
+                canvas.create_text(w/2, h/2, text="Esperando datos temporales...", fill="#444", font=("Arial", 10))
+                return
+            # Y = Conteo de objetos
+            data = [(time.strftime("%M:%S", time.localtime(t)), len(dets)) for t, dets, zc in app.chart_history]
+        
+        if not data:
+            canvas.create_text(w/2, h/2, text="Sin datos para esta configuracion", fill="#444", font=("Arial", 10))
             return
 
-        sorted_keys = sorted(counts.keys(), key=lambda x: counts[x], reverse=True)[:6]
-        max_val = max(counts.values()) if counts else 1
+        # --- 2. RENDERIZADO SEGUN TIPO ---
+        max_val = max([v for l, v in data]) if data else 1
+        if max_val == 0: max_val = 1
         
-        padding = 30
-        bar_area_h = h - 60
-        bar_w = (w - (padding * 2)) / len(sorted_keys)
-        
-        def on_bar_click(cid):
-            # Lógica de alternancia (Toggle)
-            if app.target_classes and cid in app.target_classes and len(app.target_classes) == 1:
-                app.target_classes = None
-                app.add_log("Filtro de clase deshabilitado.")
-            else:
-                app.target_classes = [cid]
-                app.add_log(f"Filtrando solo clase: {labels_map[cid].upper()}")
-            
-            # Notificar a la app para guardar config y limpiar frames
-            if hasattr(app, '_on_filter_applied'):
-                app._on_filter_applied(app.target_classes)
-            
-            # Forzar redibujado inmediato tras clic
-            VisualPainter.draw_bar_chart(app, canvas, detections)
+        padding = 40
+        if ctype == "vbar":
+            bar_w = (w - (padding * 2)) / len(data)
+            for i, (label, val) in enumerate(data):
+                bar_h = (val / max_val) * (h - 60)
+                x0 = padding + (i * bar_w) + 5
+                y0 = h - 25 - bar_h
+                x1 = x0 + bar_w - 10
+                y1 = h - 25
+                canvas.create_rectangle(x0, y0, x1, y1, fill="#10b981" if i==0 else "#065f46", outline="#10b981", width=1)
+                canvas.create_text((x0+x1)/2, y0-10, text=f"{val:.1f}" if ax_y=="conf" else str(int(val)), fill="#94a3b8", font=("Arial", 8))
+                canvas.create_text((x0+x1)/2, h-12, text=label[:8], fill="#444", font=("Arial", 8))
+                
+        elif ctype == "hbar":
+            bar_h = (h - (padding * 2)) / len(data)
+            for i, (label, val) in enumerate(data):
+                bar_w = (val / max_val) * (w - 120)
+                y0 = padding + (i * bar_h) + 2
+                x0 = 80
+                y1 = y0 + bar_h - 4
+                x1 = x0 + bar_w
+                canvas.create_rectangle(x0, y0, x1, y1, fill="#3b82f6", outline="#3b82f6", width=1)
+                canvas.create_text(40, (y0+y1)/2, text=label[:10], fill="#94a3b8", font=("Arial", 8))
+                canvas.create_text(x1+15, (y0+y1)/2, text=str(int(val)), fill="#64748b", font=("Arial", 8))
 
-        # Vincular evento general una sola vez (Tkinter find_withtag es más robusto)
-        canvas.tag_bind("bar_obj", "<Button-1>", lambda e: None) # Placeholder
-
-        for i, key in enumerate(sorted_keys):
-            val = counts[key]
-            label = labels_map.get(key, str(key))
-            bh = (val / max_val) * bar_area_h
-            x0 = padding + i * bar_w
+        elif ctype == "line":
+            pts = []
+            step_x = (w - (padding * 2)) / max(len(data)-1, 1)
+            for i, (label, val) in enumerate(data):
+                px = padding + (i * step_x)
+                py = h - 35 - (val / max_val) * (h - 70)
+                pts.append((px, py))
             
-            # Color especial si está filtrado (solo para General que usa IDs)
-            is_filtered = False
-            if mode == "General":
-                is_filtered = app.target_classes and key in app.target_classes
+            if len(pts) > 1:
+                canvas.create_line(pts, fill="#38bdf8", width=2, smooth=True)
+                # Dibujar ultimo punto destacado
+                lx, ly = pts[-1]
+                canvas.create_oval(lx-3, ly-3, lx+3, ly+3, fill="#38bdf8")
+                canvas.create_text(lx, ly-15, text=str(int(data[-1][1])), fill="#38bdf8", font=("Arial", 10, "bold"))
             
-            color = "#f59e0b" if is_filtered else ("#10b981" if mode != "General" else "#0ea5e9")
-            
-            tag = f"bar_{key}"
-            rect_id = canvas.create_rectangle(x0, h - 30 - bh, x0 + bar_w - 10, h - 30, 
-                                            fill=color, outline="", tags=(tag, "bar_obj"))
-            
-            canvas.create_text(x0 + (bar_w-10)/2, h - 15, text=label[:8], fill="#94a3b8", font=("Arial", 9), tags=(tag, "bar_obj"))
-            canvas.create_text(x0 + (bar_w-10)/2, h - 45 - bh, text=str(val), fill="#fff", font=("Arial", 9, "bold"), tags=(tag, "bar_obj"))
-            
-            # Bind click (Solo para modo General para filtrar clases)
-            if mode == "General":
-                canvas.tag_bind(tag, "<Button-1>", lambda e, c=key: on_bar_click(c))
+            # Ejes y etiquetas minimas
+            canvas.create_line(padding, h-35, w-padding, h-35, fill="#222")
+            canvas.create_text(w/2, h-12, text=f"HISTORIAL TEMPORAL (X:{ax_x.upper()} Y:{ax_y.upper()})", fill="#444", font=("Arial", 8))
 
     @staticmethod
-    def draw_detections(frame, detections, is_focus=False, show_trails=True):
-        """Dibuja cajas, etiquetas y opcionalmente trayectorias."""
+    def draw_detections(frame, detections, is_focus=False, show_trails=True, dual_mode=False):
+        """Dibuja cajas, etiquetas y opcionalmente trayectorias.
+        
+        En Dual Mode, las detecciones del modelo primario se dibujan en azul
+        y las del secundario en naranja, usando el campo 'source' de cada detección.
+        """
+        from ..core.detector import ObjectDetector
+
         h, w = frame.shape[:2]
         
         # Indicador de Modo Focus
@@ -298,7 +348,6 @@ class VisualPainter:
         current_ids = {d.get("track_id") for d in detections if d.get("track_id") is not None}
         for tid in list(VisualPainter._track_history.keys()):
             if tid not in current_ids:
-                # Si el ID no aparece en 50 frames, lo borramos (podría reaparecer pero es seguro)
                 if not hasattr(VisualPainter, '_cleanup_cnt'): VisualPainter._cleanup_cnt = {}
                 VisualPainter._cleanup_cnt[tid] = VisualPainter._cleanup_cnt.get(tid, 0) + 1
                 if VisualPainter._cleanup_cnt[tid] > 50:
@@ -314,11 +363,19 @@ class VisualPainter:
             conf = d["confidence"]
             cls_id = d["class_id"]
             t_id = d.get("track_id")
+            source = d.get("source", "primary")
             
-            color = (0, 215, 255) if is_focus else ((255, 255, 0) if cls_id >= 1000 else (233, 165, 14))
+            # Selección de color basada en fuente del modelo
+            if is_focus:
+                color = (0, 215, 255)
+            elif dual_mode:
+                color = ObjectDetector.PRIMARY_COLOR if source == "primary" else ObjectDetector.SECONDARY_COLOR
+            else:
+                color = (255, 255, 0) if cls_id >= 1000 else (233, 165, 14)
+            
             thick = 3 if is_focus else 2
             
-            # Dibujar Trayectoria (Trail)
+            # Dibujar Trayectoria (Trail) — solo para primario con tracking
             if show_trails and t_id is not None:
                 center = ((x1 + x2) // 2, (y1 + y2) // 2)
                 if t_id not in VisualPainter._track_history:
@@ -341,7 +398,8 @@ class VisualPainter:
             
             # Dibujar Etiqueta
             id_txt = f" id:{t_id}" if t_id is not None else ""
-            tag = f"{label.upper()}{id_txt} {conf:.2f}"
+            source_tag = " [M2]" if dual_mode and source == "secondary" else ""
+            tag = f"{label.upper()}{id_txt} {conf:.2f}{source_tag}"
             if is_focus: tag = f"[ FOCUS ] {tag}"
             
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -356,3 +414,62 @@ class VisualPainter:
         # Mezclar cajas translucidas
         cv2.addWeighted(box_overlay, 0.25, frame, 0.75, 0, frame)
         return frame
+
+    @staticmethod
+    def draw_model_legend(frame, primary_name, secondary_name):
+        """Dibuja una leyenda flotante en la esquina superior derecha del frame.
+        
+        Muestra el nombre de cada modelo con su color correspondiente.
+        Solo se dibuja en Dual Mode (cuando secondary_name no es None).
+        """
+        from ..core.detector import ObjectDetector
+
+        if secondary_name is None:
+            return frame
+
+        h, w = frame.shape[:2]
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        f_scale = 0.45
+        thick = 1
+        
+        # Preparar textos
+        m1_text = f"M1: {primary_name or 'Sin Modelo'}"
+        m2_text = f"M2: {secondary_name}"
+        
+        (tw1, th1), _ = cv2.getTextSize(m1_text, font, f_scale, thick)
+        (tw2, th2), _ = cv2.getTextSize(m2_text, font, f_scale, thick)
+        
+        max_tw = max(tw1, tw2)
+        padding = 8
+        line_h = 22
+        box_w = max_tw + 50 + padding * 2  # Espacio para icono de color + texto
+        box_h = line_h * 2 + padding * 2 + 4
+        
+        # Posición: esquina superior derecha
+        x_start = w - box_w - 15
+        y_start = 15
+        
+        # Fondo semi-transparente
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x_start, y_start), (x_start + box_w, y_start + box_h), (15, 15, 25), -1)
+        cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+        
+        # Borde
+        cv2.rectangle(frame, (x_start, y_start), (x_start + box_w, y_start + box_h), (100, 100, 120), 1)
+        
+        # Título
+        cv2.putText(frame, "DUAL MODE", (x_start + padding, y_start + 14), font, 0.4, (180, 180, 200), 1)
+        
+        # Línea M1 con cuadrado de color
+        y_line1 = y_start + padding + 22
+        cv2.rectangle(frame, (x_start + padding, y_line1 - 8), (x_start + padding + 14, y_line1 + 4), ObjectDetector.PRIMARY_COLOR, -1)
+        cv2.putText(frame, m1_text, (x_start + padding + 22, y_line1 + 2), font, f_scale, (220, 220, 240), thick)
+        
+        # Línea M2 con cuadrado de color
+        y_line2 = y_line1 + line_h
+        cv2.rectangle(frame, (x_start + padding, y_line2 - 8), (x_start + padding + 14, y_line2 + 4), ObjectDetector.SECONDARY_COLOR, -1)
+        cv2.putText(frame, m2_text, (x_start + padding + 22, y_line2 + 2), font, f_scale, (220, 220, 240), thick)
+        
+        return frame
+
