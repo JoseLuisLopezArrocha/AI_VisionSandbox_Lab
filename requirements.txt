@@ -7,6 +7,8 @@ vidgear[core]>=0.3.4
 pyttsx3
 python-dotenv
 requests
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
 
 # === Deep Learning y Aceleración ===
 torch>=2.0.0

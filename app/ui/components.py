@@ -616,7 +616,7 @@ class InfoWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title('Informacion del Proyecto')
-        win_w, win_h = (500, 680)
+        win_w, win_h = (680, 800)
         x = self.winfo_screenwidth() // 2 - win_w // 2
         y = self.winfo_screenheight() // 2 - win_h // 2
         self.geometry(f'{win_w}x{win_h}+{x}+{y}')
@@ -628,21 +628,29 @@ class InfoWindow(ctk.CTkToplevel):
         ctk.CTkLabel(self, text=f'Python {py_ver} | {platform.system()} {platform.machine()}', text_color='#666', font=ctk.CTkFont(size=10), corner_radius=0).pack(pady=(0, 15))
         self._section('Librerias Principales')
 
-        def lnk(text, url, pkg):
+        def lnk(text, url, pkg, desc):
             try:
                 v = importlib.metadata.version(pkg)
             except Exception:
                 v = 'N/A'
+            row = ctk.CTkFrame(self, fg_color='transparent', corner_radius=0)
+            row.pack(fill='x', padx=40, pady=1)
             btn_text = f'{text} (v{v})'
-            btn = ctk.CTkButton(self, text=btn_text, fg_color='transparent', text_color='#38bdf8', hover_color='#1e293b', anchor='w', command=lambda u=url: webbrowser.open(u), corner_radius=0)
-            btn.pack(fill='x', padx=40, pady=1)
-        lnk('ultralytics', 'https://ultralytics.com/', 'ultralytics')
-        lnk('customtkinter', 'https://customtkinter.tomschimansky.com/', 'customtkinter')
-        lnk('opencv-python', 'https://opencv.org/', 'opencv-python')
-        lnk('vidgear', 'https://abhitronix.github.io/vidgear/', 'vidgear')
-        lnk('Pillow', 'https://python-pillow.org/', 'Pillow')
-        lnk('pyttsx3', 'https://pypi.org/project/pyttsx3/', 'pyttsx3')
-        lnk('python-dotenv', 'https://pypi.org/project/python-dotenv/', 'python-dotenv')
+            btn = ctk.CTkButton(row, text=btn_text, fg_color='transparent', text_color='#38bdf8', hover_color='#1e293b', width=160, anchor='w', command=lambda u=url: webbrowser.open(u), corner_radius=0)
+            btn.pack(side='left')
+            lbl = ctk.CTkLabel(row, text=f'|  {desc}', font=ctk.CTkFont(size=10), text_color='#94a3b8', anchor='w')
+            lbl.pack(side='left', padx=10)
+
+        lnk('ultralytics', 'https://ultralytics.com/', 'ultralytics', 'Ejecuta y gestiona el motor de los modelos YOLO y RT-DETR')
+        lnk('customtkinter', 'https://customtkinter.tomschimansky.com/', 'customtkinter', 'Construye la interfaz de usuario moderna con estética Cyberpunk')
+        lnk('opencv-python', 'https://opencv.org/', 'opencv-python', 'Procesa flujos de video y permite la detección facial (Haar Cascade)')
+        lnk('scikit-learn', 'https://scikit-learn.org/', 'scikit-learn', 'Ejecuta modelos personalizados clásicos con arquitectura PCA + SVM')
+        lnk('matplotlib', 'https://matplotlib.org/', 'matplotlib', 'Genera y dibuja los gráficos interactivos del panel analítico')
+        lnk('vidgear', 'https://abhitronix.github.io/vidgear/', 'vidgear', 'Optimiza la lectura asíncrona de cámaras y transmisiones web')
+        lnk('Pillow', 'https://python-pillow.org/', 'Pillow', 'Facilita la conversión y redimensionado de imágenes en la UI')
+        lnk('pyttsx3', 'https://pypi.org/project/pyttsx3/', 'pyttsx3', 'Genera síntesis de voz automática para las notificaciones sonoras')
+        lnk('python-dotenv', 'https://pypi.org/project/python-dotenv/', 'python-dotenv', 'Carga configuraciones y variables de entorno del archivo .env')
+
         self._section('Librerias de Soporte')
         self.dep_frame = ctk.CTkFrame(self, fg_color='transparent', corner_radius=0)
         self.dep_frame.pack(fill='x', padx=30, pady=5)
