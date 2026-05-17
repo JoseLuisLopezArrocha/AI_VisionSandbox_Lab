@@ -165,6 +165,7 @@ class VisionApp(ctk.CTk):
         self.locked_track_id = None
         self.focus_lost_cnt = 0
         self._checked_datasets = set()
+        self.is_reconnecting = False
         self.is_auto_capturing = False
         self.total_detections_ever = 0
         self.session_start_time = time.time()
@@ -185,7 +186,7 @@ class VisionApp(ctk.CTk):
         self.data_logger = DataLogger()
         self.event_engine = EventEngine()
         self.detector = ObjectDetector()
-        self.engine = VisionEngine(self.url)
+        self.engine = None  # Se inicializara asincronicamente
         self._load_icons()
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=0)
@@ -199,9 +200,22 @@ class VisionApp(ctk.CTk):
         self._load_config()
         self.splash.set_status('Cargando modelo inteligente...', 0.7)
         self._load_lightest_model()
-        self.splash.set_status('Listo.', 1.0)
+        self.splash.set_status('Conectando fuente de video...', 0.85)
+        # Iniciar conexion de video en hilo para no bloquear la UI
+        self._engine_ready = False
+        threading.Thread(target=self._init_engine_async, daemon=True).start()
+        self.splash.set_status('Interfaz lista. Esperando video...', 0.95)
         self.add_log('Sistema core iniciado.')
         self.after(500, self._show_and_start)
+
+    def _init_engine_async(self):
+        """Inicializa el motor de video en un hilo de fondo."""
+        try:
+            self.engine = VisionEngine(self.url)
+            self._engine_ready = True
+            self.after(0, lambda: self.add_log('Motor de video conectado.'))
+        except Exception as e:
+            self.after(0, lambda: self.add_log(f'Error conectando motor de video: {e}'))
 
     def _show_and_start(self):
         """Finaliza la carga, destruye el splash y expande al dashboard completo."""
@@ -284,7 +298,7 @@ class VisionApp(ctk.CTk):
         header_frame = ctk.CTkFrame(sb, fg_color='transparent', height=10, corner_radius=0)
         header_frame.pack(pady=(5, 5), padx=10, fill='x')
         self._section('MODELO IA')
-        ctk.CTkButton(self.sidebar_body, text=' NUEVO MODELO', image=self.icons.get('models'), command=lambda: ModelExplorerWindow(self, self.detector), height=34, fg_color='#3b82f6', hover_color='#2563eb', text_color='#ffffff', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(0, 10), padx=15, fill='x')
+        ctk.CTkButton(self.sidebar_body, text=' NUEVO MODELO', image=self.icons.get('models'), command=lambda: ModelExplorerWindow(self, self.detector, on_refresh=self._refresh_model_selectors), height=34, fg_color='#3b82f6', hover_color='#2563eb', text_color='#ffffff', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0).pack(pady=(0, 10), padx=15, fill='x')
         self.no_model_selector = ctk.CTkButton(self.sidebar_body, text='DESACTIVAR IA', command=self._on_no_model_click, height=30, fg_color='#1e293b', hover_color='#7f1d1d', text_color='#ef4444', font=ctk.CTkFont(size=11, weight='bold'), corner_radius=0)
         self.no_model_selector.pack(pady=(0, 10), padx=15, fill='x')
         
@@ -497,6 +511,13 @@ class VisionApp(ctk.CTk):
         if hasattr(self, 'is_labeling_mode') and self.is_labeling_mode:
             self.after(500, self.update_video)
             return
+        # Esperar a que el motor de video este listo
+        if self.engine is None:
+            loading_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            cv2.putText(loading_frame, 'INICIANDO MOTOR DE VIDEO...', (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
+            self._render_canvas(loading_frame)
+            self.after(200, self.update_video)
+            return
         if not self.is_paused:
             frame = self.engine.get_frame()
             if frame is not None:
@@ -504,9 +525,10 @@ class VisionApp(ctk.CTk):
             elif not getattr(self.engine, 'is_live', False) and (not self.engine.is_stream):
                 self.is_paused = True
                 self.play_btn.configure(text='Reproducir')
-        if self.raw_frame is None:
+        if self.raw_frame is None or self.is_reconnecting:
             loading_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-            cv2.putText(loading_frame, 'CONECTANDO CON FUENTE...', (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
+            status_msg = 'RECONECTANDO MOTOR...' if self.is_reconnecting else 'CONECTANDO CON FUENTE...'
+            cv2.putText(loading_frame, status_msg, (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
             cv2.putText(loading_frame, f'Fuente: {self.url[:40]}', (400, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1)
             self._render_canvas(loading_frame)
             self.after(100, self.update_video)
@@ -547,7 +569,7 @@ class VisionApp(ctk.CTk):
             self.data_logger.log(self.last_detections, zone_data)
         elapsed_ms = (time.time() - t0) * 1000
         target_delay = 33
-        if not self.engine.is_stream and (not self.is_paused):
+        if self.engine and not self.engine.is_stream and (not self.is_paused):
             fps = self.engine.get_fps()
             target_delay = 1000 / fps
         next_delay = max(1, int(target_delay - elapsed_ms))
@@ -759,6 +781,7 @@ class VisionApp(ctk.CTk):
     def change_stream(self, new_url=None):
         if new_url:
             self.url = new_url
+        self.is_reconnecting = True
         self.raw_frame = None
         self.annotated_frame = None
         self.total_detections_ever = 0
@@ -770,9 +793,21 @@ class VisionApp(ctk.CTk):
         self.add_log(f"Configurando fuente: {(os.path.basename(self.url) if os.path.exists(self.url) else self.url[:40] + '...')} ({resolution})")
 
         def _reconnect_and_update():
-            self.engine.reconnect(self.url, resolution=resolution)
-            self.after(0, self._update_media_controls)
+            try:
+                if self.engine:
+                    self.engine.reconnect(self.url, resolution=resolution)
+                else:
+                    self.engine = VisionEngine(self.url, resolution=resolution)
+            finally:
+                self.after(0, self._on_reconnect_done)
+
         threading.Thread(target=_reconnect_and_update, daemon=True).start()
+
+    def _on_reconnect_done(self):
+        """Finaliza el estado de reconexión y restaura la UI."""
+        self.is_reconnecting = False
+        self._update_media_controls()
+        self.add_log('Stream reactivado correctamente.')
 
     def open_source_selector(self):
         """Abre la ventana de selección de fuente de vídeo."""
@@ -850,7 +885,8 @@ class VisionApp(ctk.CTk):
             self.add_log(f'Datos exportados a: {os.path.basename(dest)}')
 
     def on_closing(self):
-        self.engine.release()
+        if self.engine:
+            self.engine.release()
         self.destroy()
 
     def _save_config(self):
@@ -1006,8 +1042,12 @@ class VisionApp(ctk.CTk):
                 self.is_loading_model = False
         threading.Thread(target=load_m2, daemon=True).start()
 
-    def _on_model_added(self):
-        self.model_selector.configure(values=list(self.detector.architectures.keys()))
+    def _refresh_model_selectors(self):
+        """Actualiza los valores de los selectores de modelo M1 y M2."""
+        families = list(self.detector.architectures.keys())
+        self.model_selector.configure(values=families)
+        if hasattr(self, 'm2_family_selector'):
+            self.m2_family_selector.configure(values=families)
 
     def open_class_filter(self, is_secondary=False):
         detector_model = self.detector.secondary_model if is_secondary else self.detector.model
@@ -1178,7 +1218,7 @@ class VisionApp(ctk.CTk):
             actual_dir = ensure_dataset_structure(ds_name)
             base_name = get_next_capture_filename(ds_name, actual_dir)
             self._enter_labeling_mode()
-            AnnotationWindow(self, captured_frame, ds_name, base_name, actual_dir, self._on_capture_saved, self._exit_labeling_mode)
+            AnnotationWindow(self, captured_frame, ds_name, base_name, actual_dir, None, self._exit_labeling_mode)
         except Exception as e:
             self.add_log(f'FALLO GLOBAL CAPTURA: {e}')
             import traceback
@@ -1195,11 +1235,8 @@ class VisionApp(ctk.CTk):
             self.toggle_pause()
 
     def _on_capture_saved(self, name, boxes_count):
-        """Callback cuando el usuario guarda la anotación."""
+        """Callback cuando el usuario guarda la anotación. (Ahora integrado en exit_labeling)"""
         self.add_log(f'Captura guardada: {name} ({boxes_count} bboxes).')
-        was_paused = getattr(self, '_was_paused_before_capture', True)
-        if not was_paused and self.is_paused:
-            self.toggle_pause()
 
     def export_dataset_zip(self):
         """Exporta solo las imágenes etiquetadas y su metadata en un archivo ZIP."""
@@ -1324,19 +1361,36 @@ class VisionApp(ctk.CTk):
 
     def _enter_labeling_mode(self):
         """Suspende el motor de vídeo y entra en modo ahorro de recursos para etiquetar."""
+        # Guardamos el estado real ANTES de tocar nada
         self._was_paused_before_labeling = self.is_paused
         self.is_labeling_mode = True
+        
+        # Si no estaba pausado, pausamos para congelar el frame
+        if not self.is_paused:
+            self.toggle_pause()
+            
         self.add_log('Modo Etiquetado: Suspendiendo motor de video para ahorrar recursos...')
-        self.engine.release()
+        if self.engine:
+            self.engine.release()
         self.hw_label.configure(text='SISTEMA SUSPENDIDO (ETIQUETANDO)', text_color='#94a3b8')
 
     def _exit_labeling_mode(self):
-        """Sale del modo etiquetado y reactiva el motor de vídeo."""
+        """Sale del modo etiquetado y reactiva el motor de vídeo con seguridad."""
         self.is_labeling_mode = False
-        self.add_log('Modo Etiquetado finalizado: Reactivando motor...')
+        self.add_log('Saliendo de modo etiquetado...')
+        
+        # Pequeña pausa para permitir que la ventana modal se destruya y el sistema de hilos se estabilice
+        self.after(200, self._resume_stream_after_labeling)
+
+    def _resume_stream_after_labeling(self):
+        """Reactivación real del motor tras la pausa de seguridad."""
         was_paused = getattr(self, '_was_paused_before_labeling', False)
-        if self.is_paused != was_paused:
-            self.toggle_pause()
+        
+        # Restauramos el estado de pausa original
+        self.is_paused = was_paused
+        self._update_media_controls() # Actualiza los iconos de la UI
+        
+        self.add_log('Reactivando motor de vídeo...')
         self.change_stream()
 
     def toggle_auto_capture(self):

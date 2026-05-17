@@ -144,6 +144,7 @@ class VisionEngine:
 
     def reconnect(self, new_source: str, resolution: Optional[str] = None) -> None:
         self.release()
+        time.sleep(0.5) # Pausa técnica para asegurar liberación de sockets de red
         self.source = new_source
         if resolution: self.resolution = resolution
         self._connect(new_source, self.resolution)

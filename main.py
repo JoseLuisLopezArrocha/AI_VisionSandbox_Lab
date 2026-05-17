@@ -19,6 +19,9 @@ import sys
 import traceback
 import cv2
 
+# Desactivar OpenCL para evitar conflictos con drivers de video (especialmente Intel)
+cv2.ocl.setUseOpenCL(False)
+
 def check_python_version():
     """Verifica que la versión de Python sea compatible."""
     if sys.version_info < (3, 10):

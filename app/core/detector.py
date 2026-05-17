@@ -1,18 +1,261 @@
 """
 Motor de Inferencia de Objetos.
 Gestiona la carga de modelos YOLO/RT-DETR y la ejecución de la inferencia.
+Incluye soporte para modelos sklearn serializados como clasificadores globales.
 """
 
 import os
 import cv2
+import torch
 import numpy as np
 import json
 from ultralytics import YOLO, RTDETR
 from .hardware import HardwareManager
 from ..utils.helpers import MODELS_DIR, log_error
 
-# Directorio de modelos especializados
-CUSTOM_MODELS_DIR = os.path.join(MODELS_DIR, "custom")
+
+class _SklearnProbs:
+    """Simula la interfaz de Ultralytics Results.probs para modelos sklearn."""
+    def __init__(self, class_probs):
+        self.data = class_probs
+        sorted_indices = sorted(range(len(class_probs)), key=lambda i: class_probs[i], reverse=True)
+        self.top1 = sorted_indices[0]
+        self.top1conf = class_probs[self.top1]
+        self.top5 = sorted_indices[:5]
+        self.top5conf = [class_probs[i] for i in self.top5]
+
+
+class _SklearnResult:
+    """Simula un resultado de Ultralytics para un modelo sklearn."""
+    def __init__(self, probs):
+        self.probs = probs
+        self.boxes = None
+
+
+class SklearnModelWrapper:
+    """Wrapper que adapta modelos sklearn (.pt serializados con torch) al pipeline de inferencia.
+    
+    Soporta checkpoints con estructura {pca, svm, tamano, clase} tipica de
+    pipelines de reconocimiento facial (PCA + SVC).
+    """
+    def __init__(self, checkpoint_path):
+        self.task = 'classify'
+        self.names = {}
+        self._pca = None
+        self._classifier = None
+        self._img_size = None  # (ancho, alto) para resize
+        
+        # Cargar el checkpoint completo
+        ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        
+        if not isinstance(ckpt, dict):
+            # Si es un objeto directo con predict
+            if hasattr(ckpt, 'predict'):
+                self._classifier = ckpt
+            else:
+                raise ValueError(f"Formato de checkpoint no soportado: {type(ckpt)}")
+        else:
+            # --- Buscar PCA ---
+            for key in ['pca', 'PCA', 'reducer', 'feature_extractor']:
+                if key in ckpt and hasattr(ckpt[key], 'transform'):
+                    self._pca = ckpt[key]
+                    break
+            
+            # --- Buscar Clasificador ---
+            for key in ['svm', 'SVM', 'classifier', 'clf', 'model', 'estimator', 'pipeline']:
+                if key in ckpt and hasattr(ckpt[key], 'predict'):
+                    self._classifier = ckpt[key]
+                    break
+            # Fallback: buscar cualquier objeto con predict
+            if self._classifier is None:
+                for v in ckpt.values():
+                    if hasattr(v, 'predict') and not hasattr(v, 'transform'):
+                        self._classifier = v
+                        break
+            
+            # --- Buscar tamano de imagen de entrenamiento ---
+            for key in ['tamano', 'size', 'img_size', 'image_size']:
+                if key in ckpt:
+                    raw = ckpt[key]
+                    if isinstance(raw, (tuple, list)) and len(raw) == 2:
+                        self._img_size = (int(raw[0]), int(raw[1]))
+                    break
+            
+            # --- Buscar nombres de clases ---
+            for key in ['names', 'classes', 'class_names', 'labels', 'clase']:
+                if key in ckpt:
+                    raw = ckpt[key]
+                    if isinstance(raw, dict):
+                        self.names = {int(k): str(v) for k, v in raw.items()}
+                    elif isinstance(raw, (list, tuple)):
+                        self.names = {i: str(v) for i, v in enumerate(raw)}
+                    elif isinstance(raw, str):
+                        # Clave 'clase' con valor string: nombre de la clase positiva
+                        self.names = {0: 'desconocidos', 1: str(raw)}
+                    break
+        
+        if self._classifier is None:
+            raise ValueError(f"No se encontro clasificador en {checkpoint_path}")
+        
+        # Deducir nombres de clases del clasificador si no los tenemos
+        if not self.names and hasattr(self._classifier, 'classes_'):
+            self.names = {i: str(c) for i, c in enumerate(self._classifier.classes_)}
+        elif not self.names:
+            best = getattr(self._classifier, 'best_estimator_', None)
+            if best and hasattr(best, 'classes_'):
+                self.names = {i: str(c) for i, c in enumerate(best.classes_)}
+        
+        # Deducir tamano de imagen del PCA si no se especifico
+        if self._img_size is None and self._pca is not None:
+            n_features = self._pca.n_features_in_
+            side = int(n_features ** 0.5)
+            if side * side == n_features:
+                self._img_size = (side, side)
+            else:
+                self._img_size = (side, side)
+        
+        pca_info = f"PCA({self._pca.n_components_})" if self._pca else "Sin PCA"
+        img_info = f"{self._img_size[0]}x{self._img_size[1]}" if self._img_size else "auto"
+        print(f"[SklearnWrapper] Pipeline: {pca_info} -> {type(self._classifier).__name__}")
+        print(f"[SklearnWrapper] Clases: {self.names} | Imagen: {img_info}")
+        
+        # Cargar detector de caras Haar Cascade (incluido en OpenCV)
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        self._face_cascade = cv2.CascadeClassifier(cascade_path)
+        if self._face_cascade.empty():
+            print("[SklearnWrapper] ADVERTENCIA: No se pudo cargar Haar Cascade")
+            self._face_cascade = None
+        else:
+            print("[SklearnWrapper] Haar Cascade de caras cargado correctamente")
+
+    def _classify_crop(self, gray_crop):
+        """Clasifica un recorte en escala de grises ya preparado."""
+        resized = cv2.resize(gray_crop, self._img_size or (128, 128))
+        features = resized.flatten().astype(np.float64).reshape(1, -1)
+        
+        if self._pca is not None:
+            features = self._pca.transform(features)
+        
+        if hasattr(self._classifier, 'predict_proba'):
+            probas = self._classifier.predict_proba(features)[0]
+        elif hasattr(self._classifier, 'decision_function'):
+            decisions = self._classifier.decision_function(features)
+            if hasattr(decisions, '__len__') and len(decisions.shape) > 1:
+                decisions = decisions[0]
+            elif not hasattr(decisions, '__len__'):
+                decisions = np.array([decisions])
+            if len(decisions) == 1:
+                d = float(decisions[0])
+                exp_pos = np.exp(min(d, 500))
+                exp_neg = np.exp(min(-d, 500))
+                probas = np.array([exp_neg / (exp_pos + exp_neg), 
+                                  exp_pos / (exp_pos + exp_neg)])
+            else:
+                exp_d = np.exp(decisions - np.max(decisions))
+                probas = exp_d / exp_d.sum()
+        else:
+            pred = self._classifier.predict(features)[0]
+            n_classes = len(self.names) if self.names else 2
+            probas = np.zeros(n_classes)
+            pred_idx = int(pred) if isinstance(pred, (int, np.integer)) else 0
+            if pred_idx < n_classes:
+                probas[pred_idx] = 1.0
+        
+        return probas
+
+    def detect_and_classify(self, frame, conf_threshold=0.35, source="primary"):
+        """Pipeline completo: detecta caras con Haar Cascade, recorta cada una y clasifica.
+        
+        Retorna lista de dicts compatibles con el formato de deteccion del sistema,
+        con bounding boxes reales alrededor de cada cara detectada.
+        """
+        detections = []
+        h_frame, w_frame = frame.shape[:2]
+        
+        # Convertir a escala de grises una sola vez
+        if frame.ndim == 3:
+            gray_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray_full = frame
+        
+        if self._face_cascade is None:
+            # Sin Haar Cascade, clasificar el frame completo (fallback)
+            probas = self._classify_crop(gray_full)
+            top_id = int(np.argmax(probas))
+            top_conf = float(probas[top_id])
+            if top_conf >= conf_threshold:
+                label = self.names.get(top_id, f"Clase {top_id}")
+                detections.append({
+                    "label": label, "confidence": top_conf,
+                    "class_id": top_id, "track_id": None,
+                    "zone_indices": [], "bbox": (int(w_frame*0.1), int(h_frame*0.1), int(w_frame*0.9), int(h_frame*0.9)),
+                    "source": source, "is_classification": True
+                })
+            return detections
+        
+        # Detectar caras con Haar Cascade
+        faces = self._face_cascade.detectMultiScale(
+            gray_full,
+            scaleFactor=1.1,
+            minNeighbors=4,
+            minSize=(40, 40),
+            flags=cv2.CASCADE_SCALE_IMAGE
+        )
+        
+        for (fx, fy, fw, fh) in faces:
+            # Ampliar el recorte un 15% para incluir mas contexto facial
+            pad_x = int(fw * 0.15)
+            pad_y = int(fh * 0.15)
+            x1 = max(0, fx - pad_x)
+            y1 = max(0, fy - pad_y)
+            x2 = min(w_frame, fx + fw + pad_x)
+            y2 = min(h_frame, fy + fh + pad_y)
+            
+            # Recortar la cara y clasificar
+            face_crop = gray_full[y1:y2, x1:x2]
+            if face_crop.size == 0:
+                continue
+            
+            try:
+                probas = self._classify_crop(face_crop)
+                top_id = int(np.argmax(probas))
+                top_conf = float(probas[top_id])
+                
+                if top_conf >= conf_threshold:
+                    label = self.names.get(top_id, f"Clase {top_id}")
+                    detections.append({
+                        "label": label, "confidence": top_conf,
+                        "class_id": top_id, "track_id": None,
+                        "zone_indices": [],
+                        "bbox": (x1, y1, x2, y2),
+                        "source": source,
+                        "is_classification": False  # Tiene bbox real, pintar como deteccion normal
+                    })
+            except Exception as e:
+                log_error("EXE-COR-DET-02", f"Error clasificando cara: {e}")
+                continue
+        
+        return detections
+    
+    def predict(self, frame, **kwargs):
+        """Clasificacion global del frame (fallback sin deteccion de caras)."""
+        try:
+            if isinstance(frame, np.ndarray) and frame.ndim >= 2:
+                if frame.ndim == 3:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                else:
+                    gray = frame
+                probas = self._classify_crop(gray)
+                probs = _SklearnProbs(probas.tolist())
+                return [_SklearnResult(probs)]
+        except Exception as e:
+            log_error("EXE-COR-DET-02", f"Error en prediccion sklearn: {e}")
+        return [_SklearnResult(_SklearnProbs([0.0]))]
+    
+    def __call__(self, frame, **kwargs):
+        """Permite usar el wrapper como callable (compatibilidad con prueba de vida)."""
+        return self.predict(frame, **kwargs)
+
 
 class ObjectDetector:
     """
@@ -28,7 +271,6 @@ class ObjectDetector:
         self.current_hash = None
         self.model = None
         self.active_name = None
-        self.custom_models = []
 
         # --- Modelo Secundario (Dual Mode) ---
         self.secondary_model = None
@@ -48,10 +290,9 @@ class ObjectDetector:
         self.device = HardwareManager.get_backend_for_ultralytics()
         self.architectures = {}
         self.scan_models()
-        self._load_custom_models()
 
     def scan_models(self):
-        """Escanea el directorio MODELS_DIR buscando arquitecturas."""
+        """Escanea el directorio MODELS_DIR buscando arquitecturas, incluyendo custom."""
         self.architectures = {}
         if not os.path.exists(MODELS_DIR):
             os.makedirs(MODELS_DIR, exist_ok=True)
@@ -60,89 +301,77 @@ class ObjectDetector:
         try:
             for entry in sorted(os.listdir(MODELS_DIR)):
                 dir_path = os.path.join(MODELS_DIR, entry)
-                if os.path.isdir(dir_path) and entry != "custom":
-                    metadata = {"is_coco": True, "classes": None}
-                    meta_path = os.path.join(dir_path, "metadata.json")
-                    if os.path.exists(meta_path):
-                        with open(meta_path, "r", encoding="utf-8") as f:
-                            metadata = json.load(f)
+                if not os.path.isdir(dir_path):
+                    continue
 
-                    family_models = []
-                    for f in os.listdir(dir_path):
-                        if f.endswith(".pt"):
-                            f_path = os.path.join(dir_path, f)
-                            family_models.append({
-                                "name": f, "path": f_path, "size": os.path.getsize(f_path)
-                            })
-                    
-                    if family_models:
-                        family_models.sort(key=lambda x: x["size"])
+                is_custom = (entry == "custom")
+
+                metadata = {"is_coco": True, "classes": None}
+                meta_path = os.path.join(dir_path, "metadata.json")
+                if os.path.exists(meta_path):
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+
+                family_models = []
+                for f in os.listdir(dir_path):
+                    if f.endswith(".pt"):
+                        f_path = os.path.join(dir_path, f)
+                        family_models.append({
+                            "name": f, "path": f_path, "size": os.path.getsize(f_path)
+                        })
+
+                if family_models:
+                    family_models.sort(key=lambda x: x["size"])
+                    aliases = {}
+
+                    if is_custom:
+                        # Modelos custom: alias = nombre del archivo sin extension
+                        for m in family_models:
+                            alias = os.path.splitext(m["name"])[0]
+                            aliases[alias] = m["path"]
+                        # Marcar metadata como no-coco por defecto para custom
+                        if not os.path.exists(meta_path):
+                            metadata = {"is_coco": False, "classes": None}
+                    else:
+                        # Familias regulares: alias con prefijo numerico
                         prefix = entry[:3].upper()
-                        aliases = {}
                         for i, m in enumerate(family_models, 1):
                             alias = f"{prefix} {i:02d}"
                             aliases[alias] = m["path"]
                             base_name = os.path.splitext(m["name"])[0]
-                            
+
                             # Buscar optimizaciones en subcarpetas Intel/Nvidia
-                            for hw, icon in [("Intel", "⚡"), ("Nvidia", "🟢")]:
+                            for hw, icon in [("Intel", "[Intel]"), ("Nvidia", "[Nvidia]")]:
                                 opt_dir = os.path.join(dir_path, hw)
                                 if os.path.exists(opt_dir):
                                     ov_path = os.path.join(opt_dir, f"{base_name}_openvino_model")
                                     trt_path = os.path.join(opt_dir, f"{base_name}.engine")
-                                    
+
                                     if hw == "Intel" and os.path.exists(ov_path):
-                                        aliases[f"{alias} {icon} {hw}"] = ov_path
+                                        aliases[f"{alias} {icon}"] = ov_path
                                     elif hw == "Nvidia" and os.path.exists(trt_path):
-                                        aliases[f"{alias} {icon} {hw}"] = trt_path
-                        
-                        self.architectures[entry] = {"aliases": aliases, "metadata": metadata}
+                                        aliases[f"{alias} {icon}"] = trt_path
+
+                    self.architectures[entry] = {"aliases": aliases, "metadata": metadata}
         except Exception as e:
             log_error("EXE-COR-LOAD-03", f"Error escaneando modelos: {e}")
 
-    def _load_custom_models(self):
-        """Carga los modelos en models/custom/."""
-        self.custom_models = []
-        if not os.path.exists(CUSTOM_MODELS_DIR):
-            os.makedirs(CUSTOM_MODELS_DIR, exist_ok=True)
-            return
-            
-        for f in sorted(os.listdir(CUSTOM_MODELS_DIR)):
-            if f.endswith(".pt"):
-                path = os.path.join(CUSTOM_MODELS_DIR, f)
-                try:
-                    m = YOLO(path)
-                    dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-                    m(dummy, verbose=False, device=self.device)
-                    self.custom_models.append((m, f))
-                except Exception as e:
-                    log_error("EXE-COR-LOAD-03", f"Error cargando modelo custom {f}: {e}")
-
     def get_class_names(self):
-        """Obtiene nombres de clases respetando metadatos."""
+        """Obtiene nombres de clases respetando metadatos de la familia activa."""
         names = {}
         try:
             if hasattr(self, 'current_family') and self.current_family in self.architectures:
                 meta = self.architectures[self.current_family].get("metadata")
                 if meta and not meta.get("is_coco", True) and meta.get("classes"):
                     names = {int(i): str(name) for i, name in enumerate(meta["classes"])}
-            
+
             if not names and self.model:
                 raw_names = getattr(self.model, 'names', None)
                 if raw_names:
                     names = {int(k): str(v) for k, v in raw_names.items()}
-            
+
             if not names:
                 names = {i: f"Clase {i}" for i in range(80)}
-
-            offset = 1000
-            for cm, _ in self.custom_models:
-                c_names = getattr(cm, 'names', None)
-                if c_names:
-                    items = c_names.items() if isinstance(c_names, dict) else enumerate(c_names)
-                    for cid, cname in items:
-                        names[int(offset + cid)] = f"{str(cname)} (custom)"
-                offset += 100
         except Exception as e:
             log_error("EXE-COR-DET-02", f"Error obteniendo nombres de clases: {e}")
         return names
@@ -156,21 +385,42 @@ class ObjectDetector:
         target_name = os.path.basename(model_path)
         try:
             is_openvino = os.path.isdir(model_path)
-            if "rtdetr" in family.lower() or "rtdetr" in target_name.lower():
-                new_model = RTDETR(model_path)
-            else:
-                new_model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
+            new_model = None
+            is_sklearn = False
 
-            target_device = "cpu" # Forzamos CPU para OpenVINO para máxima compatibilidad y evitar errores de CUDA
+            # Intentar cargar como modelo YOLO/RT-DETR
+            try:
+                if "rtdetr" in family.lower() or "rtdetr" in target_name.lower():
+                    new_model = RTDETR(model_path)
+                else:
+                    new_model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
+            except Exception as yolo_err:
+                # Si YOLO falla, intentar como modelo sklearn
+                print(f"[Detector] YOLO no pudo cargar {target_name}: {yolo_err}")
+                print(f"[Detector] Intentando como modelo sklearn...")
+                try:
+                    new_model = SklearnModelWrapper(model_path)
+                    is_sklearn = True
+                except Exception as sk_err:
+                    raise RuntimeError(f"No es YOLO ni sklearn: YOLO={yolo_err}, sklearn={sk_err}")
+
+            target_device = "cpu"
             if is_openvino and self.hardware_diag["gpu_vendor"] == "Intel":
-                # En algunos sistemas 'gpu' puede fallar si no hay drivers OpenVINO GPU específicos
-                # pero mantenemos la lógica de detección por si acaso.
-                target_device = "cpu" # Cambiado a cpu para estabilidad total
+                target_device = "cpu"
             
             # Prueba de vida del modelo con el dispositivo correcto
             dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-            test_device = target_device.lower() if is_openvino else self.device
-            new_model(dummy, verbose=False, device=test_device)
+            if is_sklearn:
+                try:
+                    new_model(dummy, verbose=False)
+                except Exception as te:
+                    print(f"[Detector] Advertencia en prueba sklearn: {te}")
+            else:
+                test_device = target_device.lower() if is_openvino else self.device
+                try:
+                    new_model(dummy, verbose=False, device=test_device)
+                except Exception as te:
+                    print(f"[Detector] Advertencia en prueba de vida: {te}")
             
             # Si todo ha ido bien, actualizamos el modelo activo
             self.model = new_model
@@ -180,12 +430,11 @@ class ObjectDetector:
             self.active_device = target_device
             
             # Detectar si el modelo soporta Zero-Shot / World Prompting
-            # Verificamos si tiene el método 'set_classes' (característico de YOLO-World en Ultralytics)
             self.is_zero_shot_active = hasattr(self.model, 'set_classes') or "world" in family.lower() or "world" in target_name.lower()
             
             return target_name
         except Exception as e:
-            log_error("EXE-COR-LOAD-03", f"Fallo crítico cargando {target_name}: {e}")
+            log_error("EXE-COR-LOAD-03", f"Fallo critico cargando {target_name}: {e}")
             return None
 
     def change_secondary_model(self, family, alias):
@@ -197,19 +446,38 @@ class ObjectDetector:
         target_name = os.path.basename(model_path)
         try:
             is_openvino = os.path.isdir(model_path)
-            if "rtdetr" in family.lower() or "rtdetr" in target_name.lower():
-                new_model = RTDETR(model_path)
-            else:
-                new_model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
+            new_model = None
+            is_sklearn = False
+
+            try:
+                if "rtdetr" in family.lower() or "rtdetr" in target_name.lower():
+                    new_model = RTDETR(model_path)
+                else:
+                    new_model = YOLO(model_path, task='detect') if is_openvino else YOLO(model_path)
+            except Exception as yolo_err:
+                print(f"[Detector] YOLO no pudo cargar M2 {target_name}: {yolo_err}")
+                try:
+                    new_model = SklearnModelWrapper(model_path)
+                    is_sklearn = True
+                except Exception as sk_err:
+                    raise RuntimeError(f"No es YOLO ni sklearn: YOLO={yolo_err}, sklearn={sk_err}")
 
             target_device = "cpu"
             if is_openvino and self.hardware_diag["gpu_vendor"] == "Intel":
-                target_device = "cpu" # Forzado a cpu por estabilidad en modelos OpenVINO
+                target_device = "cpu"
             
-            # Prueba de vida del modelo secundario con el dispositivo correcto
             dummy = np.zeros((64, 64, 3), dtype=np.uint8)
-            test_device = target_device.lower() if is_openvino else self.device
-            new_model(dummy, verbose=False, device=test_device)
+            if is_sklearn:
+                try:
+                    new_model(dummy, verbose=False)
+                except Exception as te:
+                    print(f"[Detector] Advertencia en prueba sklearn M2: {te}")
+            else:
+                test_device = target_device.lower() if is_openvino else self.device
+                try:
+                    new_model(dummy, verbose=False, device=test_device)
+                except Exception as te:
+                    print(f"[Detector] Advertencia en prueba de vida M2: {te}")
             
             self.secondary_model = new_model
             self.secondary_family = family
@@ -218,7 +486,7 @@ class ObjectDetector:
             self.secondary_device = target_device
             return target_name
         except Exception as e:
-            log_error("EXE-COR-LOAD-03", f"Fallo crítico cargando modelo secundario {target_name}: {e}")
+            log_error("EXE-COR-LOAD-03", f"Fallo critico cargando modelo secundario {target_name}: {e}")
             return None
 
     def clear_secondary_model(self):
@@ -306,15 +574,64 @@ class ObjectDetector:
                 "device": target_device
             }
             
-            if target_classes is not None:
-                if len(target_classes) == 0:
-                    # Si el filtro primario está vacío, no detectamos nada del primario
-                    primary_detections = []
-                else:
+            # Determinar si el modelo primario es de clasificación
+            is_classify = getattr(self.model, 'task', 'detect') == 'classify'
+
+            primary_detections = []
+            if target_classes is not None and len(target_classes) == 0:
+                # Si el filtro primario está vacío, no detectamos nada del primario
+                pass
+            elif isinstance(self.model, SklearnModelWrapper):
+                # Pipeline especial: Haar Cascade (detectar caras) + sklearn (clasificar cada cara)
+                primary_detections = self.model.detect_and_classify(
+                    frame, conf_threshold=conf_threshold, source="primary"
+                )
+                # Asignar zonas a cada deteccion
+                for det in primary_detections:
+                    cx = (det["bbox"][0] + det["bbox"][2]) / 2
+                    cy = (det["bbox"][1] + det["bbox"][3]) / 2
+                    det["zone_indices"] = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
+            else:
+                if target_classes is not None and not is_classify:
                     kwargs["classes"] = target_classes
-                    results = self.model.track(frame, **kwargs)
-                    primary_detections = []
-                    for result in results:
+
+                # Ejecutar inferencia primaria
+                try:
+                    if is_classify:
+                        cls_kwargs = {k: v for k, v in kwargs.items() if k not in ("persist", "classes")}
+                        results = self.model.predict(frame, **cls_kwargs)
+                    else:
+                        results = self.model.track(frame, **kwargs)
+                except Exception:
+                    # Fallback a predict normal si track falla o da error de dispositivo
+                    cls_kwargs = {k: v for k, v in kwargs.items() if k not in ("persist",)}
+                    results = self.model.predict(frame, **cls_kwargs)
+
+                # Parsear resultados primarios
+                for result in results:
+                    # Caso A: Modelo de Clasificación (probs)
+                    if hasattr(result, 'probs') and result.probs is not None and (not hasattr(result, 'boxes') or result.boxes is None or len(result.boxes) == 0):
+                        probs = result.probs
+                        top1_id = int(probs.top1)
+                        top1_conf = float(probs.top1conf)
+                        if top1_conf >= conf_threshold:
+                            names = getattr(self.model, 'names', {})
+                            label = names.get(top1_id, f"Clase {top1_id}")
+                            # Caja virtual central que cubre el 80% de la pantalla
+                            x1, y1 = int(w_frame * 0.1), int(h_frame * 0.1)
+                            x2, y2 = int(w_frame * 0.9), int(h_frame * 0.9)
+                            cx, cy = w_frame / 2, h_frame / 2
+                            zone_indices = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
+                            primary_detections.append({
+                                "label": label, "confidence": top1_conf,
+                                "class_id": top1_id,
+                                "track_id": None,
+                                "zone_indices": zone_indices, "bbox": (x1, y1, x2, y2),
+                                "source": "primary",
+                                "is_classification": True
+                            })
+                    # Caso B: Modelo de Detección (boxes)
+                    elif hasattr(result, 'boxes') and result.boxes is not None:
                         for box in result.boxes:
                             cls_id = int(box.cls[0])
                             names = getattr(self.model, 'names', {})
@@ -328,66 +645,88 @@ class ObjectDetector:
                                 "track_id": int(box.id[0]) if box.id is not None else None,
                                 "zone_indices": zone_indices, "bbox": (int(x1), int(y1), int(x2), int(y2)),
                                 "source": "primary",
+                                "is_classification": False
                             })
-            else:
-                results = self.model.track(frame, **kwargs)
-                primary_detections = []
-                for result in results:
-                    for box in result.boxes:
-                        cls_id = int(box.cls[0])
-                        names = getattr(self.model, 'names', {})
-                        label = names.get(cls_id, f"Clase {cls_id}")
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                        zone_indices = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
-                        primary_detections.append({
-                            "label": label, "confidence": float(box.conf[0]),
-                            "class_id": cls_id,
-                            "track_id": int(box.id[0]) if box.id is not None else None,
-                            "zone_indices": zone_indices, "bbox": (int(x1), int(y1), int(x2), int(y2)),
-                            "source": "primary",
-                        })
 
             # --- Inferencia del Modelo Secundario ---
             secondary_detections = []
             if self.secondary_model is not None:
                 try:
-                    if self.is_secondary_openvino:
-                        sec_device = "gpu" if self.secondary_device == "GPU" else "cpu"
-                    else:
-                        sec_device = self.device
-                    
-                    sec_kwargs = {
-                        "conf": conf_threshold,
-                        "verbose": False,
-                        "device": sec_device
-                    }
-                    
-                    if target_classes_secondary is not None:
-                        if len(target_classes_secondary) > 0:
-                            sec_kwargs["classes"] = target_classes_secondary
-                            sec_results = self.secondary_model.predict(frame, **sec_kwargs)
+                    if isinstance(self.secondary_model, SklearnModelWrapper):
+                        # Pipeline sklearn para modelo secundario
+                        if target_classes_secondary is not None and len(target_classes_secondary) == 0:
+                            pass  # Filtro vacio, no detectar nada
                         else:
-                            sec_results = [] # Filtro vacío -> no detectar nada
+                            secondary_detections = self.secondary_model.detect_and_classify(
+                                frame, conf_threshold=conf_threshold, source="secondary"
+                            )
+                            for det in secondary_detections:
+                                cx = (det["bbox"][0] + det["bbox"][2]) / 2
+                                cy = (det["bbox"][1] + det["bbox"][3]) / 2
+                                det["zone_indices"] = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
                     else:
-                        sec_results = self.secondary_model.predict(frame, **sec_kwargs)
-
-                    for result in sec_results:
-                        for box in result.boxes:
-                            cls_id = int(box.cls[0])
-                            names = getattr(self.secondary_model, 'names', {})
-                            label = names.get(cls_id, f"Clase {cls_id}")
-                            x1, y1, x2, y2 = box.xyxy[0].tolist()
-                            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                            zone_indices = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
+                        is_sec_classify = getattr(self.secondary_model, 'task', 'detect') == 'classify'
+                        if self.is_secondary_openvino:
+                            sec_device = "gpu" if self.secondary_device == "GPU" else "cpu"
+                        else:
+                            sec_device = self.device
+                        
+                        sec_kwargs = {
+                            "conf": conf_threshold,
+                            "verbose": False,
+                            "device": sec_device
+                        }
+                        
+                        if target_classes_secondary is not None and len(target_classes_secondary) == 0:
+                            sec_results = []
+                        else:
+                            if target_classes_secondary is not None and not is_sec_classify:
+                                sec_kwargs["classes"] = target_classes_secondary
                             
-                            secondary_detections.append({
-                                "label": label, "confidence": float(box.conf[0]),
-                                "class_id": cls_id,
-                                "track_id": None,
-                                "zone_indices": zone_indices, "bbox": (int(x1), int(y1), int(x2), int(y2)),
-                                "source": "secondary",
-                            })
+                            try:
+                                sec_results = self.secondary_model.predict(frame, **sec_kwargs)
+                            except Exception:
+                                sec_results = self.secondary_model.predict(frame, conf=conf_threshold, verbose=False)
+
+                        # Parsear resultados secundarios
+                        for result in sec_results:
+                            # Caso A: Clasificación
+                            if hasattr(result, 'probs') and result.probs is not None and (not hasattr(result, 'boxes') or result.boxes is None or len(result.boxes) == 0):
+                                probs = result.probs
+                                top1_id = int(probs.top1)
+                                top1_conf = float(probs.top1conf)
+                                if top1_conf >= conf_threshold:
+                                    names = getattr(self.secondary_model, 'names', {})
+                                    label = names.get(top1_id, f"Clase {top1_id}")
+                                    x1, y1 = int(w_frame * 0.15), int(h_frame * 0.15)
+                                    x2, y2 = int(w_frame * 0.85), int(h_frame * 0.85)
+                                    cx, cy = w_frame / 2, h_frame / 2
+                                    zone_indices = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
+                                    secondary_detections.append({
+                                        "label": label, "confidence": top1_conf,
+                                        "class_id": top1_id,
+                                        "track_id": None,
+                                        "zone_indices": zone_indices, "bbox": (x1, y1, x2, y2),
+                                        "source": "secondary",
+                                        "is_classification": True
+                                    })
+                            # Caso B: Detección
+                            elif hasattr(result, 'boxes') and result.boxes is not None:
+                                for box in result.boxes:
+                                    cls_id = int(box.cls[0])
+                                    names = getattr(self.secondary_model, 'names', {})
+                                    label = names.get(cls_id, f"Clase {cls_id}")
+                                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                                    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                                    zone_indices = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
+                                    secondary_detections.append({
+                                        "label": label, "confidence": float(box.conf[0]),
+                                        "class_id": cls_id,
+                                        "track_id": None,
+                                        "zone_indices": zone_indices, "bbox": (int(x1), int(y1), int(x2), int(y2)),
+                                        "source": "secondary",
+                                        "is_classification": False
+                                    })
                 except Exception as e:
                     log_error("EXE-COR-DET-02", f"Error en modelo secundario: {e}")
 

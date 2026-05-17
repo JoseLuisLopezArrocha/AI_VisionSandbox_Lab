@@ -713,9 +713,10 @@ class CaptureNamePopup(ctk.CTkToplevel):
 class ModelExplorerWindow(ctk.CTkToplevel):
     """Ventana avanzada para gestionar las familias y archivos de modelos."""
 
-    def __init__(self, parent, detector):
+    def __init__(self, parent, detector, on_refresh=None):
         super().__init__(parent)
         self.detector = detector
+        self.on_refresh = on_refresh
         self.title('Explorador de Inteligencia')
         win_w, win_h = (500, 600)
         x = self.winfo_screenwidth() // 2 - win_w // 2
@@ -736,6 +737,11 @@ class ModelExplorerWindow(ctk.CTkToplevel):
         footer.pack(fill='x', side='bottom', pady=15, padx=20)
         ctk.CTkLabel(footer, text="Recomendacion: Manten una estructura de nombres clara para tus pesos\n(ej: 'yolo11n.pt' para Nano vs 'yolo11l.pt' para Large) para diferenciarlos.", font=('', 10), text_color='#64748b', justify='left', corner_radius=0).pack(anchor='w')
         self._refresh()
+
+    def _notify_refresh(self):
+        """Notifica al padre que la lista de modelos ha cambiado."""
+        if self.on_refresh:
+            self.on_refresh()
 
     def _refresh(self):
         for w in self.scroll.winfo_children():
@@ -769,12 +775,16 @@ class ModelExplorerWindow(ctk.CTkToplevel):
                 shutil.copy2(file, dest)
                 self.detector.scan_models()
                 self._refresh()
-                messagebox.showinfo('Éxito', f'Pesos añadidos correctamente a la familia {fam_name}.')
+                self._notify_refresh()
+                messagebox.showinfo('Exito', f'Pesos añadidos correctamente a la familia {fam_name}.')
             except Exception as e:
                 messagebox.showerror('Error', f'No se pudo copiar el archivo: {e}')
 
     def _add_new(self):
-        AddModelPopup(self, self.detector, self._refresh)
+        def _on_added():
+            self._refresh()
+            self._notify_refresh()
+        AddModelPopup(self, self.detector, _on_added)
 
     def _delete_family(self, name):
         if messagebox.askyesno('Confirmar Borrado', f"¿Estás seguro de eliminar la familia '{name}'?\nEsto borrará todos los modelos internos definitivamente."):
@@ -782,6 +792,7 @@ class ModelExplorerWindow(ctk.CTkToplevel):
                 shutil.rmtree(os.path.join(MODELS_DIR, name))
                 self.detector.scan_models()
                 self._refresh()
+                self._notify_refresh()
             except Exception as e:
                 messagebox.showerror('Error', f'No se pudo borrar: {e}')
 
@@ -1008,7 +1019,7 @@ class DashboardSettingsWindow(ctk.CTkToplevel):
         self.config = config
         self.available_classes = available_classes
         self.title('Ajustes de Analitica Modular')
-        self.geometry('450x550')
+        self.geometry('450x650')
         self.grab_set()
         
         # Estetica Industrial
@@ -1017,40 +1028,62 @@ class DashboardSettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(header, text='DISEÑO DE DASHBOARD TÁCTICO', font=ctk.CTkFont(size=14, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(pady=15)
         
         body = ctk.CTkFrame(self, fg_color='transparent', corner_radius=0)
-        body.pack(fill='both', expand=True, padx=20, pady=20)
+        body.pack(fill='both', expand=True, padx=20, pady=(10, 5))
         
         # SECCION 1: Tipo de Grafico y Ejes
         ctk.CTkLabel(body, text='ARQUITECTURA DE DATOS', font=ctk.CTkFont(size=11, weight='bold'), text_color='#38bdf8', corner_radius=0).pack(anchor='w', pady=(0, 5))
         
         arch_frame = ctk.CTkFrame(body, fg_color='#1e293b', corner_radius=0)
-        arch_frame.pack(fill='x', pady=(0, 20), padx=5)
+        arch_frame.pack(fill='x', pady=(0, 15), padx=5)
         
         # Tipo de grafico
         row1 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
         row1.pack(fill='x', padx=10, pady=5)
         ctk.CTkLabel(row1, text='Tipo de Gráfico:', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
-        self.chart_type_var = ctk.StringVar(value=config.get("chart_type", "vbar"))
-        ctk.CTkOptionMenu(row1, values=['vbar', 'hbar', 'line'], variable=self.chart_type_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+        self.chart_type_map = {
+            "Barras Verticales": "vbar",
+            "Barras Horizontales": "hbar",
+            "Linea de Tendencia": "line",
+            "Area Degradada": "area",
+            "Radar de Clases": "radar",
+            "Dispersion (Scatter)": "scatter"
+        }
+        saved_type = config.get("chart_type", "vbar")
+        current_type_display = next((k for k, v in self.chart_type_map.items() if v == saved_type), "Barras Verticales")
+        self.chart_type_var = ctk.StringVar(value=current_type_display)
+        ctk.CTkOptionMenu(row1, values=list(self.chart_type_map.keys()), variable=self.chart_type_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
         
         # Eje X
         row2 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
         row2.pack(fill='x', padx=10, pady=5)
         ctk.CTkLabel(row2, text='Eje X (Dato):', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
-        self.axis_x_var = ctk.StringVar(value=config.get("axis_x", "class"))
-        ctk.CTkOptionMenu(row2, values=['class', 'zone', 'time'], variable=self.axis_x_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+        self.axis_x_map = {
+            "Clases Detectadas": "class",
+            "Zonas / Áreas": "zone",
+            "Evolución Temporal": "time"
+        }
+        current_x_display = [k for k, v in self.axis_x_map.items() if v == config.get("axis_x", "class")][0]
+        self.axis_x_var = ctk.StringVar(value=current_x_display)
+        ctk.CTkOptionMenu(row2, values=list(self.axis_x_map.keys()), variable=self.axis_x_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
         
         # Eje Y
         row3 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
         row3.pack(fill='x', padx=10, pady=5)
         ctk.CTkLabel(row3, text='Eje Y (Métrica):', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
-        self.axis_y_var = ctk.StringVar(value=config.get("axis_y", "count"))
-        ctk.CTkOptionMenu(row3, values=['count', 'cumulative', 'conf'], variable=self.axis_y_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+        self.axis_y_map = {
+            "Objetos en Pantalla": "count",
+            "Total Acumulado": "cumulative",
+            "Fiabilidad Media (%)": "conf"
+        }
+        current_y_display = [k for k, v in self.axis_y_map.items() if v == config.get("axis_y", "count")][0]
+        self.axis_y_var = ctk.StringVar(value=current_y_display)
+        ctk.CTkOptionMenu(row3, values=list(self.axis_y_map.keys()), variable=self.axis_y_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
 
         # SECCION 2: Resumen Lateral
         ctk.CTkLabel(body, text='MÉTRICAS DE RESUMEN', font=ctk.CTkFont(size=11, weight='bold'), text_color='#94a3b8', corner_radius=0).pack(anchor='w', pady=(0, 5))
         
         metrics_frame = ctk.CTkFrame(body, fg_color='#1e293b', corner_radius=0)
-        metrics_frame.pack(fill='x', pady=(0, 20), padx=5)
+        metrics_frame.pack(fill='x', pady=(0, 15), padx=5)
         
         self.show_top_5_var = ctk.BooleanVar(value=config.get("show_top_5", True))
         ctk.CTkCheckBox(metrics_frame, text='Mostrar Automáticamente TOP 5', variable=self.show_top_5_var, corner_radius=0).pack(anchor='w', padx=15, pady=10)
@@ -1070,12 +1103,12 @@ class DashboardSettingsWindow(ctk.CTkToplevel):
             self.check_vars[cls_name] = var
             
         # BOTON GUARDAR
-        ctk.CTkButton(self, text='APLICAR CONFIGURACIÓN', command=self._save_and_close, height=45, fg_color='#10b981', hover_color='#059669', font=ctk.CTkFont(size=12, weight='bold'), corner_radius=0).pack(fill='x', padx=20, pady=20)
+        ctk.CTkButton(self, text='APLICAR CONFIGURACIÓN', command=self._save_and_close, height=45, fg_color='#10b981', hover_color='#059669', font=ctk.CTkFont(size=12, weight='bold'), corner_radius=0).pack(fill='x', padx=20, pady=(5, 15))
 
     def _save_and_close(self):
-        self.config["chart_type"] = self.chart_type_var.get()
-        self.config["axis_x"] = self.axis_x_var.get()
-        self.config["axis_y"] = self.axis_y_var.get()
+        self.config["chart_type"] = self.chart_type_map.get(self.chart_type_var.get(), "vbar")
+        self.config["axis_x"] = self.axis_x_map.get(self.axis_x_var.get(), "class")
+        self.config["axis_y"] = self.axis_y_map.get(self.axis_y_var.get(), "count")
         self.config["show_top_5"] = self.show_top_5_var.get()
         self.config["pinned_classes"] = [cls for cls, var in self.check_vars.items() if var.get()]
         
