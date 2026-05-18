@@ -61,6 +61,12 @@ El sistema de eventos ha sido redisenado para permitir una configuracion total p
 - **Control de Cooldown**: Evita la saturacion de alertas con tiempos de espera configurables.
 - **Validacion Secundaria**: Doble factor IA con YOLO-World, Segmentacion, Ollama o HuggingFace.
 
+### Motores de Inferencia Directa con Ollama (v5.0)
+*   **Integracion Multimodal Local Directa**: Inferencia de vídeo en tiempo real utilizando modelos multimodales locales de Ollama (ej. `llama3.2-vision:latest`).
+*   **Escaneo de Servidor Activo**: El sistema consulta dinámicamente `/api/tags` e `/api/show` al arrancar utilizando el módulo `ollama_helper` para filtrar e inyectar en la UI **únicamente** los modelos locales con capacidades multimodales/visión verificadas (ej. `llama3.2-vision:latest`), evitando timeouts o fallos con modelos de solo texto.
+*   **Procesamiento Asincrono en Hilos de Fondo**: Las consultas HTTP al VLM local se realizan en un hilo de ejecución secundario y seguro, evitando congelar el renderizado fluido del vídeo a 30 FPS.
+*   **Mapeo y Leyenda Dinamica de Clases**: Las etiquetas devueltas por el VLM en lenguaje natural se traducen dinámicamente y se integran automáticamente en la leyenda interactiva y en el desglose analítico.
+
 ### Proveedores de IA para Validacion (v4.1)
 El sistema permite configurar proveedores externos de IA para la comprobacion de hitos:
 - **Ollama**: Endpoint local configurable con modelos multimodales (llava, moondream, etc.).

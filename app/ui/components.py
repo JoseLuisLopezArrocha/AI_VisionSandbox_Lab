@@ -1087,6 +1087,15 @@ class DashboardSettingsWindow(ctk.CTkToplevel):
         self.axis_y_var = ctk.StringVar(value=current_y_display)
         ctk.CTkOptionMenu(row3, values=list(self.axis_y_map.keys()), variable=self.axis_y_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
 
+        # Filtrar Clase (Para desglose de zonas)
+        row4 = ctk.CTkFrame(arch_frame, fg_color='transparent', corner_radius=0)
+        row4.pack(fill='x', padx=10, pady=5)
+        ctk.CTkLabel(row4, text='Filtrar Clase:', font=ctk.CTkFont(size=10), text_color='#94a3b8', width=100, anchor='w', corner_radius=0).pack(side='left')
+        class_options = ["Todas"] + self.available_classes
+        saved_filter = config.get("filter_class", "Todas")
+        self.filter_class_var = ctk.StringVar(value=saved_filter if saved_filter in class_options else "Todas")
+        ctk.CTkOptionMenu(row4, values=class_options, variable=self.filter_class_var, height=24, font=ctk.CTkFont(size=10), corner_radius=0).pack(side='left', fill='x', expand=True)
+
         # SECCION 2: Resumen Lateral
         ctk.CTkLabel(body, text='MÉTRICAS DE RESUMEN', font=ctk.CTkFont(size=11, weight='bold'), text_color='#94a3b8', corner_radius=0).pack(anchor='w', pady=(0, 5))
         
@@ -1117,6 +1126,7 @@ class DashboardSettingsWindow(ctk.CTkToplevel):
         self.config["chart_type"] = self.chart_type_map.get(self.chart_type_var.get(), "vbar")
         self.config["axis_x"] = self.axis_x_map.get(self.axis_x_var.get(), "class")
         self.config["axis_y"] = self.axis_y_map.get(self.axis_y_var.get(), "count")
+        self.config["filter_class"] = self.filter_class_var.get()
         self.config["show_top_5"] = self.show_top_5_var.get()
         self.config["pinned_classes"] = [cls for cls, var in self.check_vars.items() if var.get()]
         

@@ -20,8 +20,12 @@ class SecondaryValidator:
     Modulo de Verificacion Avanzada.
     Soporta multiples proveedores de validacion de imagenes.
     """
-    
+    # [Propósito]: Modelo YOLO segmentador perezosamente instanciado para tareas de verificación local (local_seg).
+    # [Tipo]: Optional[YOLO]
     _seg_model = None
+
+    # [Propósito]: Modelo YOLO-World perezosamente instanciado para consultas zero-shot y texto libre (universal).
+    # [Tipo]: Optional[YOLO]
     _world_model = None
 
     @staticmethod
@@ -70,8 +74,10 @@ class SecondaryValidator:
                 result_ok, result_msg, evidence_img = SecondaryValidator._validate_local_seg(frame, seg_config)
             elif provider == "ollama":
                 result_ok, result_msg = SecondaryValidator._validate_ollama(frame, config)
+                evidence_img = frame # Fallback al frame original para permitir el callback de hitos y notificaciones
             elif provider == "huggingface":
                 result_ok, result_msg = SecondaryValidator._validate_hf(frame, config)
+                evidence_img = frame # Fallback al frame original para permitir el callback de hitos y notificaciones
 
             status = "OK" if result_ok else "NO"
             if log_callback:
@@ -101,17 +107,17 @@ class SecondaryValidator:
             for box in results.boxes:
                 label = results.names[int(box.cls[0])]
                 if (target == "Cualquiera" or label.lower() == target.lower()) and float(box.conf[0]) > 0.35:
-                    return True, f"Evidencia confirmada ({label})", results.plot()
+                     return True, f"Evidencia confirmada ({label})", results.plot()
         return False, "No detectado por segmentacion", None
 
     @staticmethod
     def _validate_ollama(frame, config):
         """
-        Validacion mediante Ollama (modelos multimodales locales).
-        Envia la imagen al endpoint /api/generate con un prompt de confirmacion.
+        Validación y descripción mediante Ollama (modelo VLM Gemma local).
+        Envía el frame a la API local para describir la situación exacta en español.
         """
         url = config.get("ollama_url", "").rstrip("/")
-        model = config.get("ollama_model", "llava")
+        model = config.get("ollama_model", "gemma4:latest")
         prompt = config.get("prompt", "object")
         
         if not url:
@@ -121,14 +127,14 @@ class SecondaryValidator:
         
         try:
             # Codificar imagen a base64
-            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             img_base64 = base64.b64encode(buffer).decode("utf-8")
             
-            # Construir prompt de validacion
+            # Construir prompt de descripción detallada en español
             question = (
-                f"Analyze this image. Is there a '{prompt}' present? "
-                f"Answer with exactly 'Confirmado' if yes, or 'No detectado' if no. "
-                f"Then provide a very brief explanation (max 10 words)."
+                f"Analiza detalladamente esta imagen y describe la situación exacta en una o dos frases concisas en español. "
+                f"Concéntrate especialmente en la presencia, acción y contexto de '{prompt}'. "
+                f"Sé muy descriptivo y directo."
             )
             
             payload = {
@@ -138,22 +144,23 @@ class SecondaryValidator:
                 "stream": False,
             }
             
-            resp = requests.post(f"{url}/api/generate", json=payload, timeout=30)
+            resp = requests.post(f"{url}/api/generate", json=payload, timeout=35)
             
             if resp.status_code == 200:
                 data = resp.json()
                 response_text = data.get("response", "").strip()
-                is_confirmed = "confirmado" in response_text.lower()
-                status = "Confirmado" if is_confirmed else "No detectado"
-                # Mostramos la respuesta completa en el log (el widget de la UI se encarga del scroll)
-                return is_confirmed, f"Ollama ({model}): {status} -- {response_text}"
+                if not response_text:
+                    return False, f"Ollama ({model}): Respuesta vacía del modelo"
+                
+                # Retorna True para confirmar el hito, adjuntando la descripción generada por Gemma VLM
+                return True, f"Gemma VLM informa: {response_text}"
             else:
                 return False, f"Ollama: Error HTTP {resp.status_code}"
                 
         except requests.exceptions.ConnectionError:
-            return False, f"Ollama: Sin conexion a {url}"
+            return False, f"Ollama: Sin conexión a {url}"
         except requests.exceptions.Timeout:
-            return False, "Ollama: Timeout (>30s)"
+            return False, "Ollama: Timeout (>35s)"
         except Exception as e:
             return False, f"Ollama: Error -- {str(e)[:60]}"
 

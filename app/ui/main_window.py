@@ -142,37 +142,145 @@ class VisionApp(ctk.CTk):
         self.geometry(f'{width}x{height}+{x}+{y}')
         self.splash = _SplashScreen(self)
         self.splash.set_status('Iniciando motores core...')
+        
+        # [Propósito]: Lock de exclusión mutua para evitar condiciones de carrera al leer/escribir el frame anotado.
+        # [Tipo]: threading.Lock
         self._render_lock = threading.Lock()
+
+        # [Propósito]: Último frame capturado crudo sin anotaciones gráficas.
+        # [Tipo]: Optional[np.ndarray]
         self.raw_frame = None
+
+        # [Propósito]: Último frame anotado con cajas de detección, zonas e información del HUD.
+        # [Tipo]: Optional[np.ndarray]
         self.annotated_frame = None
+
+        # [Propósito]: Bandera que indica si el hilo de inferencia está ocupado procesando un frame.
+        # [Tipo]: bool
         self.is_inferencing = False
+
+        # [Propósito]: Bandera de bloqueo para evitar múltiples solicitudes de carga de modelos YOLO simultáneas.
+        # [Tipo]: bool
         self.is_loading_model = False
+
+        # [Propósito]: Lista de las detecciones del último frame procesado con fines de persistencia o eventos.
+        # [Tipo]: list[dict]
         self.last_detections = []
+
+        # [Propósito]: Bandera de pausa para detener temporalmente el flujo de video y la inferencia.
+        # [Tipo]: bool
         self.is_paused = False
+
+        # [Propósito]: Lista de polígonos correspondientes a las zonas delimitadas de interés.
+        # [Tipo]: list[list[tuple[float, float]]]
         self.zones = []
+
+        # [Propósito]: Puntos temporales que forman la zona que se está dibujando actualmente en pantalla.
+        # [Tipo]: list[tuple[float, float]]
         self.current_zone = []
+
+        # [Propósito]: Bandera que indica si el usuario está en proceso interactivo de dibujar una zona.
+        # [Tipo]: bool
         self.is_drawing_zone = False
+
+        # [Propósito]: Filtro de clases seleccionadas para procesar detecciones en el Modelo 1 (None = todas).
+        # [Tipo]: Optional[list[int]]
         self.target_classes = None  # Lista de IDs (int) a detectar (M1)
+
+        # [Propósito]: Filtro de clases seleccionadas para procesar detecciones en el Modelo 2 (None = todas).
+        # [Tipo]: Optional[list[int]]
         self.target_classes_m2 = None # Lista de IDs (int) a detectar (M2)
+
+        # [Propósito]: Activa o desactiva la renderización del mapa de calor acumulado.
+        # [Tipo]: bool
         self.heatmap_enabled = False
+
+        # [Propósito]: Matriz acumuladora para pintar el mapa de calor con suavizado gaussiano.
+        # [Tipo]: Optional[np.ndarray]
         self.heatmap_acc = None
+
+        # [Propósito]: Umbral mínimo de confianza para registrar una inferencia.
+        # [Tipo]: float
         self.conf_threshold = 0.35
+
+        # [Propósito]: Intervalo mínimo de tiempo (segundos) entre ejecuciones consecutivas del detector de visión.
+        # [Tipo]: float
         self.infer_interval = 0.1
+
+        # [Propósito]: Duración en milisegundos de la última operación de inferencia de red neuronal.
+        # [Tipo]: float
         self.last_infer_time = 0
+
+        # [Propósito]: Marca de tiempo Unix de la última ejecución del pipeline de inferencia.
+        # [Tipo]: float
         self.last_infer_timestamp = 0
+
+        # [Propósito]: Nivel de opacidad para el destello visual de color rojo ante alertas críticas.
+        # [Tipo]: float
         self.flash_alpha = 0.0
+
+        # [Propósito]: URL o ruta física activa de la transmisión de video seleccionada.
+        # [Tipo]: str
         self.url = 'https://www.youtube.com/watch?v=dfVK7ld38Ys'
+
+        # [Propósito]: ID de track en el que se enfoca la cámara virtual (Modo Enfoque).
+        # [Tipo]: Optional[int]
         self.locked_track_id = None
+
+        # [Propósito]: Contador de frames perdidos del ID enfocado antes de restablecer al modo general.
+        # [Tipo]: int
         self.focus_lost_cnt = 0
+
+        # [Propósito]: Almacena el conjunto de datasets procesados para auditoría.
+        # [Tipo]: set[str]
         self._checked_datasets = set()
+
+        # [Propósito]: Indica si el motor de video se encuentra reestableciendo la conexión a la red.
+        # [Tipo]: bool
         self.is_reconnecting = False
+
+        # [Propósito]: Bandera para captura automatizada de evidencias.
+        # [Tipo]: bool
         self.is_auto_capturing = False
+
+        # [Propósito]: Total de objetos únicos acumulados que se han detectado durante la sesión.
+        # [Tipo]: int
         self.total_detections_ever = 0
+
+        # [Propósito]: Timestamp de inicio de la sesión de streaming para calcular tiempos de actividad.
+        # [Tipo]: float
         self.session_start_time = time.time()
+
+        # [Propósito]: Conjunto de identificadores de tracking vistos por el Modelo 1.
+        # [Tipo]: set[int]
         self.session_seen_ids = set()
+
+        # [Propósito]: Conteo acumulativo de clases únicas detectadas por el Modelo 1.
+        # [Tipo]: Counter
         self.session_class_counts = Counter()
+
+        # [Propósito]: Registro indexado de zonas, contadores e IDs únicos del Modelo 1.
+        # [Tipo]: dict[int, dict]
         self.session_zone_data = {} # {idx: {"ids": set(), "counts": Counter()}}
+
+        # [Propósito]: Conteo acumulativo de clases únicas detectadas por el Modelo 2.
+        # [Tipo]: Counter
+        self.session_class_counts_m2 = Counter()
+
+        # [Propósito]: Conjunto de identificadores de tracking vistos por el Modelo 2.
+        # [Tipo]: set[int]
+        self.session_seen_ids_m2 = set()
+
+        # [Propósito]: Registro indexado de zonas, contadores e IDs únicos del Modelo 2.
+        # [Tipo]: dict[int, dict]
+        self.session_zone_data_m2 = {} # {idx: {"counts": Counter()}}
+
+        # [Propósito]: Modo actual de renderizado del gráfico de barras ('General' o 'Zonas').
+        # [Tipo]: str
         self.bar_chart_mode = 'General'
+
+        # [Propósito]: Diccionario persistente de opciones de visualización de analíticas modulares.
+        # [Tipo]: dict[str, Any]
         self.dashboard_config = {
             "show_top_5": True,
             "pinned_classes": [],
@@ -180,13 +288,29 @@ class VisionApp(ctk.CTk):
             "axis_x": "class",    # 'class', 'zone', 'time'
             "axis_y": "count",    # 'count', 'cumulative', 'conf'
             "chart_mode": "live",
-            "metric_primary": "total_unique"
+            "metric_primary": "total_unique",
+            "filter_class": "Todas"
         }
+
+        # [Propósito]: Búfer temporal de telemetría histórica para series analíticas complejas.
+        # [Tipo]: list[tuple]
         self.chart_history = [] # Buffer para series temporales: [(timestamp, detections, zone_counts), ...]
+
+        # [Propósito]: Registrador asíncrono a base de datos de telemetría histórica.
+        # [Tipo]: DataLogger
         self.data_logger = DataLogger()
+
+        # [Propósito]: Instancia del motor de evaluación de reglas asíncronas.
+        # [Tipo]: EventEngine
         self.event_engine = EventEngine()
+
+        # [Propósito]: Instancia del detector de objetos dinámico (soporte Dual Model).
+        # [Tipo]: ObjectDetector
         self.detector = ObjectDetector()
-        self.engine = None  # Se inicializara asincronicamente
+
+        # [Propósito]: Motor activo de adquisición de video con soporte de hilos en tiempo real.
+        # [Tipo]: Optional[VisionEngine]
+        self.engine = None  # Se inicializará asincrónicamente
         self._load_icons()
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=0)
@@ -744,21 +868,51 @@ class VisionApp(ctk.CTk):
             with self._render_lock:
                 self.annotated_frame = ann
             for d in detections:
-                tid = d.get('track_id')
-                if tid is not None:
-                    # Registro Global
-                    if tid not in self.session_seen_ids:
-                        self.session_seen_ids.add(tid)
-                        self.session_class_counts[d['label']] += 1
-                    
-                    # Registro por Zonas
-                    for zi in d.get('zone_indices', []):
-                        if zi >= 0:
-                            if zi not in self.session_zone_data:
-                                self.session_zone_data[zi] = {"ids": set(), "counts": Counter()}
-                            if tid not in self.session_zone_data[zi]["ids"]:
-                                self.session_zone_data[zi]["ids"].add(tid)
-                                self.session_zone_data[zi]["counts"][d['label']] += 1
+                source = d.get('source', 'primary')
+                label = d['label']
+                if source == 'primary':
+                    tid = d.get('track_id')
+                    if tid is not None:
+                        # Registro Global
+                        if tid not in self.session_seen_ids:
+                            self.session_seen_ids.add(tid)
+                            self.session_class_counts[label] += 1
+                        
+                        # Registro por Zonas
+                        for zi in d.get('zone_indices', []):
+                            if zi >= 0:
+                                if zi not in self.session_zone_data:
+                                    self.session_zone_data[zi] = {"ids": set(), "counts": Counter()}
+                                if tid not in self.session_zone_data[zi]["ids"]:
+                                    self.session_zone_data[zi]["ids"].add(tid)
+                                    self.session_zone_data[zi]["counts"][label] += 1
+                else:
+                    # Registro Global para M2
+                    tid = d.get('track_id')
+                    if tid is not None:
+                        if tid not in self.session_seen_ids_m2:
+                            self.session_seen_ids_m2.add(tid)
+                            self.session_class_counts_m2[label] += 1
+                        
+                        # Registro por Zonas para M2
+                        for zi in d.get('zone_indices', []):
+                            if zi >= 0:
+                                if zi not in self.session_zone_data_m2:
+                                    self.session_zone_data_m2[zi] = {"ids": set(), "counts": Counter()}
+                                elif "ids" not in self.session_zone_data_m2[zi]:
+                                    self.session_zone_data_m2[zi]["ids"] = set()
+                                
+                                if tid not in self.session_zone_data_m2[zi]["ids"]:
+                                    self.session_zone_data_m2[zi]["ids"].add(tid)
+                                    self.session_zone_data_m2[zi]["counts"][label] += 1
+                    else:
+                        # Fallback seguro si M2 no provee track_id
+                        self.session_class_counts_m2[label] += 1
+                        for zi in d.get('zone_indices', []):
+                            if zi >= 0:
+                                if zi not in self.session_zone_data_m2:
+                                    self.session_zone_data_m2[zi] = {"counts": Counter()}
+                                self.session_zone_data_m2[zi]["counts"][label] += 1
             
             self.total_detections_ever = len(self.session_seen_ids)
             self.event_engine.update_cumulative_stats(detections)
@@ -789,6 +943,9 @@ class VisionApp(ctk.CTk):
         self.session_seen_ids = set()
         self.session_class_counts = Counter()
         self.session_zone_data = {}
+        self.session_class_counts_m2 = Counter()
+        self.session_seen_ids_m2 = set()
+        self.session_zone_data_m2 = {}
         resolution = self.stream_quality_var.get()
         self.add_log(f"Configurando fuente: {(os.path.basename(self.url) if os.path.exists(self.url) else self.url[:40] + '...')} ({resolution})")
 

@@ -14,18 +14,49 @@ class VisionEngine:
     """
 
     def __init__(self, source: str, resolution: str = "720p") -> None:
+        # [Propósito]: Cadena que representa la ruta de archivo local, índice de cámara o URL de red de la fuente de video.
+        # [Tipo]: str
         self.source: str = source
+
+        # [Propósito]: Resolución de salida objetivo para flujos web o de YouTube (ej. "720p", "480p").
+        # [Tipo]: str
         self.resolution: str = resolution
+
+        # [Propósito]: Instancia del motor especializado CamGear para flujos web o transmisiones en directo de YouTube.
+        # [Tipo]: Optional[CamGear]
         self.stream: Optional[CamGear] = None
+
+        # [Propósito]: Instancia del lector de video de OpenCV para archivos locales y cámaras web directas.
+        # [Tipo]: Optional[cv2.VideoCapture]
         self.cap: Optional[cv2.VideoCapture] = None
+
+        # [Propósito]: Bandera que indica si la fuente corresponde a una transmisión por protocolo de red o URL.
+        # [Tipo]: bool
         self.is_stream: bool = False
+
+        # [Propósito]: Indica si la transmisión es en tiempo real o en vivo (cámaras o protocolos de baja latencia).
+        # [Tipo]: bool
         self.is_live: bool = False
+
+        # [Propósito]: Bandera que señala si la fuente de video es una cámara conectada físicamente (ej. por USB).
+        # [Tipo]: bool
         self.is_camera: bool = False
         
         # Hilo de lectura para fuentes no CamGear
+        # [Propósito]: Último frame de imagen decodificado leído con éxito desde la fuente de video.
+        # [Tipo]: Optional[np.ndarray]
         self._frame: Optional[np.ndarray] = None
+
+        # [Propósito]: Bandera de control para mantener en ejecución el bucle de lectura continuo en segundo plano.
+        # [Tipo]: bool
         self._running: bool = False
+
+        # [Propósito]: Bloqueo de hilo mutuo (Mutex) para garantizar acceso seguro en entornos multihilo al frame decodificado.
+        # [Tipo]: threading.Lock
         self._read_lock = threading.Lock()
+
+        # [Propósito]: Referencia al objeto Thread encargado de capturar y decodificar frames de fondo para VideoCapture.
+        # [Tipo]: Optional[threading.Thread]
         self._thread: Optional[threading.Thread] = None
         
         self._connect(source, self.resolution)

@@ -27,8 +27,12 @@ class EventEngine:
     Motor de Inteligencia de Eventos.
     """
     def __init__(self):
+        # [Propósito]: Lista de reglas de eventos/alertas cargadas desde el archivo de configuración JSON.
+        # [Tipo]: list[dict]
         self.rules = []
-        # Cargar configuracion desde entorno (.env) con fallback a vacio
+
+        # [Propósito]: Diccionario que almacena las credenciales de entorno y parámetros de APIs externas.
+        # [Tipo]: dict[str, str]
         self.config = {
             "webhook_url": os.getenv("WEBHOOK_URL", ""),
             "telegram_token": os.getenv("TELEGRAM_TOKEN", ""),
@@ -38,15 +42,36 @@ class EventEngine:
             "huggingface_api_key": os.getenv("HUGGINGFACE_API_KEY", ""),
             "huggingface_model": os.getenv("HUGGINGFACE_MODEL", ""),
         }
+
+        # [Propósito]: Registro de marcas de tiempo del último disparo de cada regla para implementar control de cooldown.
+        # [Tipo]: dict[str, float]
         self.last_triggered = {}
+
+        # [Propósito]: Rastreo del momento inicial en que una condición de regla comenzó a cumplirse para el cálculo de persistencia.
+        # [Tipo]: dict[str, float]
         self.active_conditions_start = {} # Para rastreo de persistencia temporal
+
+        # [Propósito]: Estructura interna de datos acumulados sobre detecciones globales persistentes.
+        # [Tipo]: dict[str, dict]
         self.cumulative_data = {}
+
+        # [Propósito]: Mapeo de frecuencias e hitos para contadores acumulativos de eventos históricos.
+        # [Tipo]: dict[str, int]
         self.cumulative_counts = {}
+
+        # [Propósito]: Almacena el último mensaje de error ocurrido durante el envío de alertas externas o guardado de evidencias.
+        # [Tipo]: str
         self.last_error = ""
         
         self.load_rules()
         self.load_stats()
+
+        # [Propósito]: Gestor de la base de datos SQLite para registrar los hitos y detecciones de forma local.
+        # [Tipo]: DBManager
         self.db = DBManager()
+
+        # [Propósito]: Ruta absoluta del directorio local donde se guardan las capturas de imagen como evidencia.
+        # [Tipo]: str
         self.evidence_dir = os.path.join(LOGS_DIR, "evidences")
         os.makedirs(self.evidence_dir, exist_ok=True)
         

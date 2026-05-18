@@ -9,6 +9,8 @@ import cv2
 import torch
 import numpy as np
 import json
+import base64
+import requests
 from ultralytics import YOLO, RTDETR
 from .hardware import HardwareManager
 from ..utils.helpers import MODELS_DIR, log_error
@@ -257,6 +259,139 @@ class SklearnModelWrapper:
         return self.predict(frame, **kwargs)
 
 
+class OllamaVisionWrapper:
+    """
+    Wrapper para ejecutar inferencia de detección utilizando modelos de Ollama.
+    """
+    def __init__(self, model_name, base_url="http://192.168.0.135:11434"):
+        # [Propósito]: Tipo de tarea simulada compatible con Ultralytics (detect).
+        # [Tipo]: str
+        self.task = 'detect'
+        
+        # [Propósito]: Mapeo de IDs de clase a nombres legibles por la UI.
+        # [Tipo]: dict[int, str]
+        self.names = {
+            0: "persona", 1: "bicicleta", 2: "coche", 3: "moto",
+            5: "autobus", 7: "camion", 9: "semaforo"
+        }
+        
+        # [Propósito]: Mapeo inverso de nombres a IDs de clase estándar o generados.
+        # [Tipo]: dict[str, int]
+        self.class_map = {
+            "persona": 0, "person": 0,
+            "bicicleta": 1, "bicycle": 1,
+            "coche": 2, "car": 2, "automobile": 2,
+            "moto": 3, "motorcycle": 3,
+            "autobus": 5, "bus": 5,
+            "camion": 7, "truck": 7,
+            "semaforo": 9, "traffic light": 9
+        }
+        
+        # [Propósito]: Nombre de modelo cargado en Ollama.
+        # [Tipo]: str
+        self.model_name = model_name
+        
+        # [Propósito]: URL base del servidor Ollama.
+        # [Tipo]: str
+        self.base_url = base_url.rstrip("/")
+        
+        print(f"[OllamaVisionWrapper] Inicializado para modelo: {model_name} en {self.base_url}")
+
+    def detect(self, frame, conf_threshold=0.35, source="secondary"):
+        """Ejecuta consulta VLM a Ollama para detectar objetos en la imagen y los mapea a bboxes."""
+        detections = []
+        h_frame, w_frame = frame.shape[:2]
+        
+        try:
+            import cv2
+            import base64
+            import requests
+            import json
+            
+            _, buffer = cv2.imencode('.jpg', frame)
+            img_base64 = base64.b64encode(buffer).decode('utf-8')
+        except Exception as e:
+            print(f"[OllamaVisionWrapper] Error codificando imagen: {e}")
+            return detections
+
+        url = f"{self.base_url}/api/generate"
+        prompt = """Identifica todos los objetos presentes en la imagen. 
+Para cada objeto, devuelve una lista de diccionarios JSON bajo la llave "detections".
+Cada diccionario de objeto debe tener las llaves "label" (nombre del objeto en minúsculas y español) y "bbox" [y1, x1, y2, x2] con coordenadas relativas escaladas en un rango de 0 a 1000 (donde [0,0,1000,1000] cubre toda la imagen).
+Ejemplo de formato exacto de salida:
+{
+  "detections": [
+    {"label": "coche", "bbox": [100, 150, 800, 900]}
+  ]
+}
+No agregues explicaciones adicionales, devuelve SOLO el objeto JSON estructurado."""
+
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "images": [img_base64],
+            "stream": False,
+            "format": "json"
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=8)
+            if response.status_code == 200:
+                result = response.json().get("response", "")
+                data = json.loads(result)
+                raw_dets = data.get("detections", [])
+                for i, rd in enumerate(raw_dets):
+                    label = rd.get("label", "objeto").lower().strip()
+                    bbox_1000 = rd.get("bbox", [0, 0, 1000, 1000])
+                    
+                    if len(bbox_1000) != 4:
+                        continue
+                        
+                    y1, x1, y2, x2 = bbox_1000
+                    
+                    # Convertir coordenadas relativas (0-1000) a píxeles
+                    rx1 = int((x1 / 1000) * w_frame)
+                    ry1 = int((y1 / 1000) * h_frame)
+                    rx2 = int((x2 / 1000) * w_frame)
+                    ry2 = int((y2 / 1000) * h_frame)
+                    
+                    # Asegurar límites correctos
+                    rx1 = max(0, min(rx1, w_frame - 1))
+                    ry1 = max(0, min(ry1, h_frame - 1))
+                    rx2 = max(0, min(rx2, w_frame - 1))
+                    ry2 = max(0, min(ry2, h_frame - 1))
+                    
+                    # Asignar clase dinámicamente si no existe
+                    if label not in self.class_map:
+                        next_id = 100 + len(self.class_map)
+                        self.class_map[label] = next_id
+                        self.names[next_id] = label
+                        
+                    cls_id = self.class_map[label]
+                    
+                    detections.append({
+                        "label": label,
+                        "confidence": 0.85,  # Confianza fija alta para VLM
+                        "class_id": cls_id,
+                        "track_id": 9000 + i, # Virtual tracking ID
+                        "zone_indices": [],
+                        "bbox": (rx1, ry1, rx2, ry2),
+                        "source": source,
+                        "is_classification": False
+                    })
+        except Exception as e:
+            print(f"[OllamaVisionWrapper] Error en consulta VLM: {e}")
+        return detections
+
+    def predict(self, frame, **kwargs):
+        """Simula predict."""
+        return self.detect(frame, **kwargs)
+
+    def __call__(self, frame, **kwargs):
+        """Simula callable."""
+        return self.predict(frame, **kwargs)
+
+
 class ObjectDetector:
     """
     Detector de objetos dinámico con soporte para múltiples familias de modelos.
@@ -264,21 +399,46 @@ class ObjectDetector:
     """
 
     # Colores BGR para distinguir visualmente cada modelo
-    PRIMARY_COLOR = (14, 165, 233)    # Azul cielo (#0EA5E9) en BGR
+    PRIMARY_COLOR = (233, 165, 14)    # Azul cielo (#0EA5E9) en BGR
     SECONDARY_COLOR = (0, 165, 255)   # Naranja (#FFA500) en BGR
 
     def __init__(self, initial_family=None, initial_alias=None):
+        # [Propósito]: Hash de archivo único del modelo primario para evitar recargas redundantes.
+        # [Tipo]: Optional[str]
         self.current_hash = None
+
+        # [Propósito]: Instancia del modelo primario activo cargado en memoria.
+        # [Tipo]: Optional[object]
         self.model = None
+
+        # [Propósito]: Nombre identificador o alias del modelo primario activo.
+        # [Tipo]: Optional[str]
         self.active_name = None
 
         # --- Modelo Secundario (Dual Mode) ---
+        # [Propósito]: Instancia del modelo secundario activo cargado en memoria.
+        # [Tipo]: Optional[object]
         self.secondary_model = None
+
+        # [Propósito]: Nombre identificador o alias del modelo secundario activo.
+        # [Tipo]: Optional[str]
         self.secondary_name = None
+
+        # [Propósito]: Nombre de la carpeta de familia a la que pertenece el modelo secundario.
+        # [Tipo]: Optional[str]
         self.secondary_family = None
+
+        # [Propósito]: Indica si el modelo secundario cargado es una optimización de OpenVINO.
+        # [Tipo]: bool
         self.is_secondary_openvino = False
+
+        # [Propósito]: Dispositivo seleccionado para ejecutar el modelo secundario ("CPU" o "GPU").
+        # [Tipo]: str
         self.secondary_device = "CPU"
-        self.is_zero_shot_active = False # Flag para habilitar el prompt de búsqueda textual
+
+        # [Propósito]: Bandera para habilitar la entrada de texto libre en modelos YOLO-World.
+        # [Tipo]: bool
+        self.is_zero_shot_active = False
 
         try:
             self.hardware_diag = HardwareManager.get_diagnostics()
@@ -353,6 +513,28 @@ class ObjectDetector:
                                         aliases[f"{alias} {icon}"] = trt_path
 
                     self.architectures[entry] = {"aliases": aliases, "metadata": metadata}
+
+            # Consulta dinámica a Ollama para agregar modelos remotos con soporte de visión
+            try:
+                ollama_url = os.getenv("OLLAMA_URL", "http://192.168.0.135:11434").rstrip("/")
+                from .ollama_helper import get_ollama_models_with_vision
+                vision_models, vision_count, error = get_ollama_models_with_vision(ollama_url)
+                if not error and vision_models:
+                    ollama_aliases = {}
+                    for name in vision_models:
+                        clean_name = name.split(":")[0].replace("-", " ").title()
+                        tag = name.split(":")[1] if ":" in name else "latest"
+                        alias = f"{clean_name} ({tag})"
+                        ollama_aliases[alias] = f"ollama://{name}"
+                    
+                    if ollama_aliases:
+                        self.architectures["ollama"] = {
+                            "aliases": ollama_aliases,
+                            "metadata": {"is_coco": False, "classes": ["persona", "bicicleta", "coche", "moto", "autobus", "camion", "semaforo", "objeto"]}
+                        }
+                        print(f"[Detector] Se cargaron {len(ollama_aliases)} modelos dinamicos de vision desde Ollama ({ollama_url})")
+            except Exception as e:
+                print(f"[Detector] No se pudo conectar a Ollama para escaneo de modelos: {e}")
         except Exception as e:
             log_error("EXE-COR-LOAD-03", f"Error escaneando modelos: {e}")
 
@@ -384,6 +566,17 @@ class ObjectDetector:
         model_path = self.architectures[family]["aliases"][alias]
         target_name = os.path.basename(model_path)
         try:
+            if family == "ollama":
+                ollama_url = os.getenv("OLLAMA_URL", "http://192.168.0.135:11434").rstrip("/")
+                model_name = model_path.replace("ollama://", "")
+                self.model = OllamaVisionWrapper(model_name, base_url=ollama_url)
+                self.current_family = family
+                self.active_name = alias
+                self.is_openvino_active = False
+                self.active_device = "Ollama VLM"
+                self.is_zero_shot_active = False
+                return alias
+
             is_openvino = os.path.isdir(model_path)
             new_model = None
             is_sklearn = False
@@ -445,6 +638,16 @@ class ObjectDetector:
         model_path = self.architectures[family]["aliases"][alias]
         target_name = os.path.basename(model_path)
         try:
+            if family == "ollama":
+                ollama_url = os.getenv("OLLAMA_URL", "http://192.168.0.135:11434").rstrip("/")
+                model_name = model_path.replace("ollama://", "")
+                self.secondary_model = OllamaVisionWrapper(model_name, base_url=ollama_url)
+                self.secondary_family = family
+                self.secondary_name = alias
+                self.is_secondary_openvino = False
+                self.secondary_device = "Ollama VLM"
+                return alias
+
             is_openvino = os.path.isdir(model_path)
             new_model = None
             is_sklearn = False
@@ -581,6 +784,16 @@ class ObjectDetector:
             if target_classes is not None and len(target_classes) == 0:
                 # Si el filtro primario está vacío, no detectamos nada del primario
                 pass
+            elif isinstance(self.model, OllamaVisionWrapper):
+                # Inferencia mediante VLM en Ollama para el modelo primario
+                primary_detections = self.model.detect(
+                    frame, conf_threshold=conf_threshold, source="primary"
+                )
+                # Asignar zonas a cada detección
+                for det in primary_detections:
+                    cx = (det["bbox"][0] + det["bbox"][2]) / 2
+                    cy = (det["bbox"][1] + det["bbox"][3]) / 2
+                    det["zone_indices"] = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
             elif isinstance(self.model, SklearnModelWrapper):
                 # Pipeline especial: Haar Cascade (detectar caras) + sklearn (clasificar cada cara)
                 primary_detections = self.model.detect_and_classify(
@@ -652,7 +865,17 @@ class ObjectDetector:
             secondary_detections = []
             if self.secondary_model is not None:
                 try:
-                    if isinstance(self.secondary_model, SklearnModelWrapper):
+                    if isinstance(self.secondary_model, OllamaVisionWrapper):
+                        # Inferencia mediante VLM en Ollama para el modelo secundario
+                        secondary_detections = self.secondary_model.detect(
+                            frame, conf_threshold=conf_threshold, source="secondary"
+                        )
+                        # Asignar zonas a cada detección
+                        for det in secondary_detections:
+                            cx = (det["bbox"][0] + det["bbox"][2]) / 2
+                            cy = (det["bbox"][1] + det["bbox"][3]) / 2
+                            det["zone_indices"] = self._get_zones_for_point(cx, cy, w_frame, h_frame, zones)
+                    elif isinstance(self.secondary_model, SklearnModelWrapper):
                         # Pipeline sklearn para modelo secundario
                         if target_classes_secondary is not None and len(target_classes_secondary) == 0:
                             pass  # Filtro vacio, no detectar nada
@@ -672,6 +895,7 @@ class ObjectDetector:
                             sec_device = self.device
                         
                         sec_kwargs = {
+                            "persist": True,
                             "conf": conf_threshold,
                             "verbose": False,
                             "device": sec_device
@@ -683,10 +907,17 @@ class ObjectDetector:
                             if target_classes_secondary is not None and not is_sec_classify:
                                 sec_kwargs["classes"] = target_classes_secondary
                             
-                            try:
-                                sec_results = self.secondary_model.predict(frame, **sec_kwargs)
-                            except Exception:
-                                sec_results = self.secondary_model.predict(frame, conf=conf_threshold, verbose=False)
+                            if is_sec_classify:
+                                cls_sec_kwargs = {k: v for k, v in sec_kwargs.items() if k not in ("persist",)}
+                                sec_results = self.secondary_model.predict(frame, **cls_sec_kwargs)
+                            else:
+                                try:
+                                    sec_results = self.secondary_model.track(frame, **sec_kwargs)
+                                except Exception:
+                                    try:
+                                        sec_results = self.secondary_model.track(frame, conf=conf_threshold, verbose=False)
+                                    except Exception:
+                                        sec_results = self.secondary_model.predict(frame, conf=conf_threshold, verbose=False)
 
                         # Parsear resultados secundarios
                         for result in sec_results:
@@ -722,7 +953,7 @@ class ObjectDetector:
                                     secondary_detections.append({
                                         "label": label, "confidence": float(box.conf[0]),
                                         "class_id": cls_id,
-                                        "track_id": None,
+                                        "track_id": int(box.id[0]) if box.id is not None else None,
                                         "zone_indices": zone_indices, "bbox": (int(x1), int(y1), int(x2), int(y2)),
                                         "source": "secondary",
                                         "is_classification": False

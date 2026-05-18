@@ -36,12 +36,14 @@ def main():
         from app.ui.main_window import VisionApp
         from app.utils.error_handler import log_error
 
-        # Configurar ambiente y lanzar app
+        # [Propósito]: Instancia principal de la interfaz gráfica y del motor de procesamiento de visión (VisionApp).
+        # [Tipo]: VisionApp
         app = VisionApp()
         app.protocol("WM_DELETE_WINDOW", app.on_closing)
         app.mainloop()
     except Exception as e:
-        # Registro de errores fatales en el arranque usando el manejador estandar
+        # [Propósito]: Cadena de texto formateada que contiene la traza detallada del error de arranque.
+        # [Tipo]: str
         error_info = traceback.format_exc()
         try:
             from app.utils.error_handler import log_error
@@ -54,6 +56,8 @@ def main():
         
         # Intentar persistir error
         try:
+            # [Propósito]: Descriptor de archivo para escribir el registro de fallos en el disco.
+            # [Tipo]: TextIOWrapper
             with open("startup_error.log", "w", encoding="utf-8") as f:
                 f.write(error_info)
         except:

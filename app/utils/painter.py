@@ -13,7 +13,12 @@ class VisualPainter:
     Aisla la logica de visualizacion del motor de deteccion.
     """
 
+    # [Propósito]: Historial de coordenadas centrales de objetos indexados por track_id para renderizar trazas de movimiento.
+    # [Tipo]: dict[int, list[tuple[int, int]]]
     _track_history: dict = {}
+
+    # [Propósito]: Contador de desvanecimiento por ID de tracking para eliminar trazas inactivas y optimizar memoria.
+    # [Tipo]: dict[int, int]
     _cleanup_cnt: dict = {}
 
     @staticmethod
@@ -231,8 +236,13 @@ class VisualPainter:
         VisualPainter.draw_chart(app, canvas, detections)
 
     @staticmethod
+    @staticmethod
     def draw_chart(app, canvas, detections):
-        """Motor de graficos avanzado: modular y configurable."""
+        """Motor de graficos avanzado: modular y configurable.
+        
+        Soporta Modo Dual (M1 + M2) mostrando dos graficos independientes en paralelo.
+        Soporta filtrado por clase para desglose comparativo de General vs Zonas.
+        """
         canvas.delete("all")
         w, h = canvas.winfo_width(), canvas.winfo_height()
         if w < 50 or h < 50: return
@@ -241,166 +251,343 @@ class VisualPainter:
         ctype = cfg.get("chart_type", "vbar")
         ax_x = cfg.get("axis_x", "class")
         ax_y = cfg.get("axis_y", "count")
+        filter_class = cfg.get("filter_class", "Todas")
         
-        # --- 1. RECOLECCION DE DATOS SEGUN CONFIGURACION ---
-        data = [] # List of (label, value)
+        is_dual = app.detector.is_dual_mode() if hasattr(app, 'detector') else False
         
-        if ax_x == "class":
-            # X = Clases. Y = Métrica elegida.
-            source = app.session_class_counts if ax_y == "cumulative" else Counter([d['label'] for d in detections])
-            if ax_y == "conf":
-                # Media de confianza por clase (en el frame actual)
-                conf_sums = Counter()
-                conf_counts = Counter()
-                for d in detections:
-                    conf_sums[d['label']] += d.get('confidence', 0)
-                    conf_counts[d['label']] += 1
-                data = [(k, conf_sums[k]/conf_counts[k]) for k in conf_sums]
-            else:
-                data = sorted(source.items(), key=lambda x: x[1], reverse=True)[:6]
-        
-        elif ax_x == "zone":
-            # X = Zonas. Y = Métrica elegida.
-            zones_count = len(app.zones) if hasattr(app, 'zones') else 0
-            for i in range(zones_count):
-                label = f"Z{i+1}"
-                if ax_y == "cumulative":
-                    val = len(app.session_zone_data.get(i, {"ids": set()})["ids"])
+        if is_dual:
+            # Dividir canvas al 50%
+            w_half = w // 2
+            
+            # Separar detecciones
+            primary_dets = [d for d in detections if d.get("source", "primary") == "primary"]
+            secondary_dets = [d for d in detections if d.get("source") == "secondary"]
+            
+            # 1. Obtener datos para M1
+            data_m1 = []
+            if ax_x == "class":
+                source = app.session_class_counts if ax_y == "cumulative" else Counter([d['label'] for d in primary_dets])
+                if ax_y == "conf":
+                    conf_sums = Counter()
+                    conf_counts = Counter()
+                    for d in primary_dets:
+                        conf_sums[d['label']] += d.get('confidence', 0)
+                        conf_counts[d['label']] += 1
+                    data_m1 = [(k, conf_sums[k]/conf_counts[k]) for k in conf_sums]
                 else:
-                    val = sum(1 for d in detections if i in d.get("zone_indices", []))
-                data.append((label, val))
-        
-        elif ax_x == "time":
-            # Caso especial: Serie temporal (solo util para linea)
-            if not getattr(app, 'chart_history', []): 
-                canvas.create_text(w/2, h/2, text="Esperando datos temporales...", fill="#444", font=("Arial", 10))
-                return
-            # Y = Conteo de objetos
-            data = [(time.strftime("%M:%S", time.localtime(t)), len(dets)) for t, dets, zc in app.chart_history]
-        
+                    data_m1 = sorted(source.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            elif ax_x == "zone":
+                zones_count = len(app.zones) if hasattr(app, 'zones') else 0
+                if filter_class != "Todas":
+                    # Barra General para la clase filtrada
+                    if ax_y == "cumulative":
+                        g_val = app.session_class_counts.get(filter_class, 0)
+                    elif ax_y == "conf":
+                        primary_target_dets = [d for d in primary_dets if d['label'] == filter_class]
+                        g_val = (sum(d.get('confidence', 0) for d in primary_target_dets) / len(primary_target_dets)) if primary_target_dets else 0
+                    else:
+                        g_val = sum(1 for d in primary_dets if d['label'] == filter_class)
+                    data_m1.append(("General", g_val))
+                    
+                    # Barras de zonas para la clase filtrada
+                    for i in range(zones_count):
+                        label = f"Z{i+1}"
+                        if ax_y == "cumulative":
+                            val = app.session_zone_data.get(i, {"counts": Counter()})["counts"].get(filter_class, 0)
+                        elif ax_y == "conf":
+                            target_dets = [d for d in primary_dets if d['label'] == filter_class and i in d.get("zone_indices", [])]
+                            val = (sum(d.get('confidence', 0) for d in target_dets) / len(target_dets)) if target_dets else 0
+                        else:
+                            val = sum(1 for d in primary_dets if d['label'] == filter_class and i in d.get("zone_indices", []))
+                        data_m1.append((label, val))
+                else:
+                    # Sin filtrar: contar todo en cada zona
+                    for i in range(zones_count):
+                        label = f"Z{i+1}"
+                        if ax_y == "cumulative":
+                            val = len(app.session_zone_data.get(i, {"ids": set()})["ids"])
+                        else:
+                            val = sum(1 for d in primary_dets if i in d.get("zone_indices", []))
+                        data_m1.append((label, val))
+            
+            elif ax_x == "time":
+                if getattr(app, 'chart_history', []):
+                    data_m1 = [(time.strftime("%M:%S", time.localtime(t)), sum(1 for d in dets if d.get("source", "primary") == "primary")) for t, dets, zc in app.chart_history]
+            
+            # 2. Obtener datos para M2
+            data_m2 = []
+            if ax_x == "class":
+                source_m2 = getattr(app, 'session_class_counts_m2', Counter()) if ax_y == "cumulative" else Counter([d['label'] for d in secondary_dets])
+                if ax_y == "conf":
+                    conf_sums = Counter()
+                    conf_counts = Counter()
+                    for d in secondary_dets:
+                        conf_sums[d['label']] += d.get('confidence', 0)
+                        conf_counts[d['label']] += 1
+                    data_m2 = [(k, conf_sums[k]/conf_counts[k]) for k in conf_sums]
+                else:
+                    data_m2 = sorted(source_m2.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            elif ax_x == "zone":
+                zones_count = len(app.zones) if hasattr(app, 'zones') else 0
+                if filter_class != "Todas":
+                    # Barra General para la clase filtrada en M2
+                    if ax_y == "cumulative":
+                        g_val = getattr(app, 'session_class_counts_m2', Counter()).get(filter_class, 0)
+                    elif ax_y == "conf":
+                        secondary_target_dets = [d for d in secondary_dets if d['label'] == filter_class]
+                        g_val = (sum(d.get('confidence', 0) for d in secondary_target_dets) / len(secondary_target_dets)) if secondary_target_dets else 0
+                    else:
+                        g_val = sum(1 for d in secondary_dets if d['label'] == filter_class)
+                    data_m2.append(("General", g_val))
+                    
+                    # Barras de zonas para la clase filtrada en M2
+                    for i in range(zones_count):
+                        label = f"Z{i+1}"
+                        if ax_y == "cumulative":
+                            val = getattr(app, 'session_zone_data_m2', {}).get(i, {"counts": Counter()})["counts"].get(filter_class, 0)
+                        elif ax_y == "conf":
+                            target_dets = [d for d in secondary_dets if d['label'] == filter_class and i in d.get("zone_indices", [])]
+                            val = (sum(d.get('confidence', 0) for d in target_dets) / len(target_dets)) if target_dets else 0
+                        else:
+                            val = sum(1 for d in secondary_dets if d['label'] == filter_class and i in d.get("zone_indices", []))
+                        data_m2.append((label, val))
+                else:
+                    # Sin filtrar M2
+                    for i in range(zones_count):
+                        label = f"Z{i+1}"
+                        if ax_y == "cumulative":
+                            val = 0
+                            if hasattr(app, 'session_zone_data_m2') and i in app.session_zone_data_m2:
+                                val = sum(app.session_zone_data_m2[i]["counts"].values())
+                        else:
+                            val = sum(1 for d in secondary_dets if i in d.get("zone_indices", []))
+                        data_m2.append((label, val))
+            
+            elif ax_x == "time":
+                if getattr(app, 'chart_history', []):
+                    data_m2 = [(time.strftime("%M:%S", time.localtime(t)), sum(1 for d in dets if d.get("source") == "secondary")) for t, dets, zc in app.chart_history]
+            
+            # Dibujar divisor Cyberpunk en el medio
+            canvas.create_line(w_half, 10, w_half, h - 25, fill="#334155", width=1, dash=(2, 2))
+            
+            # Renderizar M1 (Izquierda)
+            title_m1 = f"M1: {app.detector.active_name or 'Primario'}"
+            if filter_class != "Todas":
+                title_m1 += f" ({filter_class.upper()})"
+            VisualPainter._render_sub_chart(app, canvas, 0, w_half - 10, h, title_m1, data_m1, ctype, "primary", ax_y)
+            
+            # Renderizar M2 (Derecha)
+            title_m2 = f"M2: {app.detector.secondary_name or 'Secundario'}"
+            if filter_class != "Todas":
+                title_m2 += f" ({filter_class.upper()})"
+            VisualPainter._render_sub_chart(app, canvas, w_half + 10, w_half - 10, h, title_m2, data_m2, ctype, "secondary", ax_y)
+            
+            # Footer general de comparativa
+            x_label_map = {"class": "CLASES", "zone": "ZONAS", "time": "TIEMPO"}
+            y_label_map = {"count": "CANTIDAD", "cumulative": "ACUMULADO", "conf": "CONFIANZA %"}
+            footer_text = f"COMPARATIVA DUAL: {x_label_map.get(ax_x, ax_x).upper()} vs {y_label_map.get(ax_y, ax_y).upper()}"
+            if filter_class != "Todas":
+                footer_text += f" [FILTRADO: {filter_class.upper()}]"
+            canvas.create_text(w/2, h-10, text=footer_text, fill="#475569", font=("Arial", 8, "bold"))
+            
+        else:
+            # Modo Simple: renderizar un unico grafico a pantalla completa
+            data = []
+            if ax_x == "class":
+                source = app.session_class_counts if ax_y == "cumulative" else Counter([d['label'] for d in detections])
+                if ax_y == "conf":
+                    conf_sums = Counter()
+                    conf_counts = Counter()
+                    for d in detections:
+                        conf_sums[d['label']] += d.get('confidence', 0)
+                        conf_counts[d['label']] += 1
+                    data = [(k, conf_sums[k]/conf_counts[k]) for k in conf_sums]
+                else:
+                    data = sorted(source.items(), key=lambda x: x[1], reverse=True)[:6]
+            
+            elif ax_x == "zone":
+                zones_count = len(app.zones) if hasattr(app, 'zones') else 0
+                if filter_class != "Todas":
+                    # Barra General
+                    if ax_y == "cumulative":
+                        g_val = app.session_class_counts.get(filter_class, 0)
+                    elif ax_y == "conf":
+                        target_dets = [d for d in detections if d['label'] == filter_class]
+                        g_val = (sum(d.get('confidence', 0) for d in target_dets) / len(target_dets)) if target_dets else 0
+                    else:
+                        g_val = sum(1 for d in detections if d['label'] == filter_class)
+                    data.append(("General", g_val))
+                    
+                    # Barras de zonas
+                    for i in range(zones_count):
+                        label = f"Z{i+1}"
+                        if ax_y == "cumulative":
+                            val = app.session_zone_data.get(i, {"counts": Counter()})["counts"].get(filter_class, 0)
+                        elif ax_y == "conf":
+                            target_dets = [d for d in detections if d['label'] == filter_class and i in d.get("zone_indices", [])]
+                            val = (sum(d.get('confidence', 0) for d in target_dets) / len(target_dets)) if target_dets else 0
+                        else:
+                            val = sum(1 for d in detections if d['label'] == filter_class and i in d.get("zone_indices", []))
+                        data.append((label, val))
+                else:
+                    # Sin filtrar
+                    for i in range(zones_count):
+                        label = f"Z{i+1}"
+                        if ax_y == "cumulative":
+                            val = len(app.session_zone_data.get(i, {"ids": set()})["ids"])
+                        else:
+                            val = sum(1 for d in detections if i in d.get("zone_indices", []))
+                        data.append((label, val))
+            
+            elif ax_x == "time":
+                if not getattr(app, 'chart_history', []): 
+                    canvas.create_text(w/2, h/2, text="Esperando datos temporales...", fill="#444", font=("Arial", 10))
+                    return
+                data = [(time.strftime("%M:%S", time.localtime(t)), len(dets)) for t, dets, zc in app.chart_history]
+            
+            title = f"MODELO: {app.detector.active_name or 'Primario'}"
+            if filter_class != "Todas":
+                title += f" ({filter_class.upper()})"
+            VisualPainter._render_sub_chart(app, canvas, 0, w, h, title, data, ctype, "primary", ax_y)
+            
+            # Footer general
+            x_label_map = {"class": "CLASES", "zone": "ZONAS", "time": "TIEMPO"}
+            y_label_map = {"count": "CANTIDAD", "cumulative": "ACUMULADO", "conf": "CONFIANZA %"}
+            footer_text = f"ANÁLISIS: {x_label_map.get(ax_x, ax_x).upper()} vs {y_label_map.get(ax_y, ax_y).upper()}"
+            canvas.create_text(w/2, h-10, text=footer_text, fill="#475569", font=("Arial", 8, "bold"))
+
+    @staticmethod
+    def _render_sub_chart(app, canvas, x_offset, width, height, title, data, ctype, model_type, ax_y):
+        """Renderiza un grafico especifico en una subseccion horizontal del canvas."""
         if not data:
-            canvas.create_text(w/2, h/2, text="ESPERANDO DATOS DE INFERENCIA...", fill="#475569", font=("Arial", 10, "bold"))
+            cx = x_offset + width / 2
+            cy = height / 2
+            canvas.create_text(cx, cy - 10, text=title.upper(), fill="#64748b" if model_type == "primary" else "#f59e0b", font=("Arial", 8, "bold"))
+            canvas.create_text(cx, cy + 10, text="ESPERANDO DETECCIONES...", fill="#475569", font=("Arial", 7, "bold"))
             return
 
-        # --- 2. RENDERIZADO SEGUN TIPO ---
         max_val = max([v for l, v in data]) if data else 1
         if max_val == 0: max_val = 1
         
-        padding = 40
-        canvas.create_line(padding, h-30, w-padding, h-30, fill="#334155", width=1) # Eje X
+        padding = 35
         
-        # Mapeo de nombres internos a etiquetas legibles para el pie
-        x_label_map = {"class": "CLASES", "zone": "ZONAS", "time": "TIEMPO"}
-        y_label_map = {"count": "CANTIDAD", "cumulative": "ACUMULADO", "conf": "CONFIANZA %"}
+        # Dibujar titulo de la sub-grafica
+        title_color = "#38bdf8" if model_type == "primary" else "#fb923c"
+        canvas.create_text(x_offset + width / 2, 15, text=title.upper(), fill=title_color, font=("Arial", 9, "bold"))
         
-        footer_text = f"ANÁLISIS: {x_label_map.get(ax_x, ax_x).upper()} vs {y_label_map.get(ax_y, ax_y).upper()}"
-        canvas.create_text(w/2, h-10, text=footer_text, fill="#475569", font=("Arial", 8, "bold"))
+        # Eje X o Base
+        y_baseline = height - 28
+        canvas.create_line(x_offset + padding, y_baseline, x_offset + width - padding, y_baseline, fill="#334155", width=1)
+        
         if ctype == "vbar":
-            bar_w = (w - (padding * 2)) / len(data)
+            bar_w = (width - (padding * 2)) / len(data)
             for i, (label, val) in enumerate(data):
-                bar_h = (val / max_val) * (h - 75)
-                x0 = padding + (i * bar_w) + 8
-                y0 = h - 35 - bar_h
-                x1 = x0 + bar_w - 16
-                y1 = h - 35
-                # Estetica de barra con relieve
-                canvas.create_rectangle(x0, y0, x1, y1, fill="#064e3b", outline="#10b981", width=1)
-                canvas.create_rectangle(x0+2, y0+2, x1-2, y1, fill="#10b981", outline="", width=0)
+                bar_h = (val / max_val) * (height - 65)
+                x0 = x_offset + padding + (i * bar_w) + 4
+                y0 = height - 30 - bar_h
+                x1 = x0 + bar_w - 8
+                y1 = height - 30
                 
-                canvas.create_text((x0+x1)/2, y0-12, text=f"{val:.1f}" if ax_y=="conf" else str(int(val)), fill="#38bdf8", font=("Arial", 9, "bold"))
-                canvas.create_text((x0+x1)/2, h-22, text=label[:10].upper(), fill="#94a3b8", font=("Arial", 7))
+                # Colores temáticos
+                fill_col = "#0369a1" if model_type == "primary" else "#b45309"
+                out_col = "#0ea5e9" if model_type == "primary" else "#ffa500"
+                highlight_col = "#38bdf8" if model_type == "primary" else "#fb923c"
+                
+                # Barra con relieve
+                canvas.create_rectangle(x0, y0, x1, y1, fill=fill_col, outline=out_col, width=1)
+                canvas.create_rectangle(x0+1, y0+1, x1-1, y1, fill=highlight_col, outline="", width=0)
+                
+                val_str = f"{val:.1f}" if ax_y == "conf" else str(int(val))
+                canvas.create_text((x0+x1)/2, y0-8, text=val_str, fill="#f8fafc", font=("Arial", 8, "bold"))
+                canvas.create_text((x0+x1)/2, height-18, text=label[:8].upper(), fill="#64748b", font=("Arial", 7))
                 
         elif ctype == "hbar":
-            bar_h = (h - (padding * 2)) / len(data)
+            bar_h = (height - padding - 25) / len(data)
             for i, (label, val) in enumerate(data):
-                bar_w = (val / max_val) * (w - 120)
+                bar_w = (val / max_val) * (width - 100)
                 y0 = padding + (i * bar_h) + 2
-                x0 = 80
+                x0 = x_offset + 55
                 y1 = y0 + bar_h - 4
                 x1 = x0 + bar_w
-                canvas.create_rectangle(x0, y0, x1, y1, fill="#3b82f6", outline="#3b82f6", width=1)
-                canvas.create_text(40, (y0+y1)/2, text=label[:10], fill="#94a3b8", font=("Arial", 8))
-                canvas.create_text(x1+15, (y0+y1)/2, text=str(int(val)), fill="#64748b", font=("Arial", 8))
+                
+                fill_col = "#0284c7" if model_type == "primary" else "#ea580c"
+                canvas.create_rectangle(x0, y0, x1, y1, fill=fill_col, outline=fill_col, width=1)
+                canvas.create_text(x_offset + 25, (y0+y1)/2, text=label[:6].upper(), fill="#94a3b8", font=("Arial", 7))
+                val_str = f"{val:.1f}" if ax_y == "conf" else str(int(val))
+                canvas.create_text(x1+12, (y0+y1)/2, text=val_str, fill="#64748b", font=("Arial", 7))
 
         elif ctype == "line":
             pts = []
-            step_x = (w - (padding * 2)) / max(len(data)-1, 1)
+            step_x = (width - (padding * 2)) / max(len(data)-1, 1)
             for i, (label, val) in enumerate(data):
-                px = padding + (i * step_x)
-                py = h - 45 - (val / max_val) * (h - 85)
+                px = x_offset + padding + (i * step_x)
+                py = height - 35 - (val / max_val) * (height - 70)
                 pts.append((px, py))
             
-            if len(pts) > 1:
-                # Fondo del area bajo la linea (translucido)
-                poly_pts = [padding, h-45] + [p for pt in pts for p in pt] + [w-padding, h-45]
-                canvas.create_polygon(poly_pts, fill="#0f172a", outline="")
-                
-                canvas.create_line(pts, fill="#38bdf8", width=3, smooth=True)
-                # Dibujar ultimo punto destacado
-                lx, ly = pts[-1]
-                canvas.create_oval(lx-4, ly-4, lx+4, ly+4, fill="#38bdf8", outline="#fff")
-                canvas.create_text(lx, ly-18, text=f"{data[-1][1]:.1f}" if ax_y=="conf" else str(int(data[-1][1])), fill="#38bdf8", font=("Arial", 11, "bold"))
+            line_col = "#0ea5e9" if model_type == "primary" else "#ffa500"
+            bg_col = "#0c4a6e" if model_type == "primary" else "#7c2d12"
             
-            # Ejes y etiquetas minimas
-            canvas.create_line(padding, h-45, w-padding, h-45, fill="#334155")
-            # Etiquetas de inicio y fin de tiempo
-            canvas.create_text(padding, h-35, text=data[0][0], fill="#475569", font=("Arial", 7))
-            canvas.create_text(w-padding, h-35, text=data[-1][0], fill="#475569", font=("Arial", 7))
+            if len(pts) > 1:
+                # Area translúcida
+                poly_pts = [x_offset + padding, height-30] + [p for pt in pts for p in pt] + [x_offset + width - padding, height-30]
+                canvas.create_polygon(poly_pts, fill=bg_col, outline="")
+                canvas.create_line(pts, fill=line_col, width=2, smooth=True)
+                
+                # Ultimo punto destacado
+                lx, ly = pts[-1]
+                canvas.create_oval(lx-3, ly-3, lx+3, ly+3, fill=line_col, outline="#fff")
+                val_str = f"{data[-1][1]:.1f}" if ax_y == "conf" else str(int(data[-1][1]))
+                canvas.create_text(lx, ly-12, text=val_str, fill=line_col, font=("Arial", 8, "bold"))
+            
+            canvas.create_text(x_offset + padding, height-18, text=str(data[0][0])[:6], fill="#475569", font=("Arial", 7))
+            canvas.create_text(x_offset + width - padding, height-18, text=str(data[-1][0])[:6], fill="#475569", font=("Arial", 7))
 
         elif ctype == "area":
-            # Grafico de Area Degradada: linea con relleno solido
             pts = []
-            step_x = (w - (padding * 2)) / max(len(data)-1, 1)
+            step_x = (width - (padding * 2)) / max(len(data)-1, 1)
             for i, (label, val) in enumerate(data):
-                px = padding + (i * step_x)
-                py = h - 45 - (val / max_val) * (h - 85)
+                px = x_offset + padding + (i * step_x)
+                py = height - 35 - (val / max_val) * (height - 70)
                 pts.append((px, py))
 
+            line_col = "#38bdf8" if model_type == "primary" else "#fb923c"
+            fill_cols = ["#0c4a6e", "#0369a1", "#0284c7"] if model_type == "primary" else ["#7c2d12", "#9a3412", "#ea580c"]
+            
             if len(pts) > 1:
-                # Relleno solido del area (degradado simulado con capas)
-                base_y = h - 45
-                colors_gradient = ["#042f2e", "#064e3b", "#065f46", "#047857"]
-                num_layers = len(colors_gradient)
-                for li, gc in enumerate(colors_gradient):
-                    offset = (num_layers - li) * 3
+                base_y = height - 30
+                num_layers = len(fill_cols)
+                for li, gc in enumerate(fill_cols):
+                    offset = (num_layers - li) * 2
                     shifted_pts = [(px, min(py + offset, base_y)) for px, py in pts]
-                    poly = [(padding, base_y)]
+                    poly = [(x_offset + padding, base_y)]
                     poly.extend(shifted_pts)
                     poly.append((pts[-1][0], base_y))
                     flat = [coord for pt in poly for coord in pt]
                     canvas.create_polygon(flat, fill=gc, outline="")
 
-                # Linea principal sobre el area
-                canvas.create_line(pts, fill="#10b981", width=2, smooth=True)
-
-                # Puntos en cada dato
+                canvas.create_line(pts, fill=line_col, width=2, smooth=True)
                 for i, (px, py) in enumerate(pts):
-                    canvas.create_oval(px-3, py-3, px+3, py+3, fill="#10b981", outline="#34d399")
-
-                # Valor del ultimo punto
+                    canvas.create_oval(px-2, py-2, px+2, py+2, fill=line_col, outline="")
                 lx, ly = pts[-1]
-                canvas.create_text(lx, ly-16, text=f"{data[-1][1]:.1f}" if ax_y=="conf" else str(int(data[-1][1])), fill="#34d399", font=("Arial", 10, "bold"))
-
-            # Eje inferior
-            canvas.create_line(padding, h-45, w-padding, h-45, fill="#334155")
-            if data:
-                canvas.create_text(padding, h-35, text=str(data[0][0])[:8], fill="#475569", font=("Arial", 7))
-                canvas.create_text(w-padding, h-35, text=str(data[-1][0])[:8], fill="#475569", font=("Arial", 7))
+                val_str = f"{data[-1][1]:.1f}" if ax_y == "conf" else str(int(data[-1][1]))
+                canvas.create_text(lx, ly-12, text=val_str, fill=line_col, font=("Arial", 8, "bold"))
+            
+            canvas.create_text(x_offset + padding, height-18, text=str(data[0][0])[:6], fill="#475569", font=("Arial", 7))
+            canvas.create_text(x_offset + width - padding, height-18, text=str(data[-1][0])[:6], fill="#475569", font=("Arial", 7))
 
         elif ctype == "radar":
-            # Grafico Radar / Araña: distribucion proporcional de clases
             import math
-            cx_r = w // 2
-            cy_r = (h - 40) // 2 + 5
-            radius = min(cx_r - padding, cy_r - 20) - 10
+            cx_r = x_offset + width // 2
+            cy_r = height // 2 + 10
+            radius = min(width // 2 - padding, height // 2 - 20) - 5
             n = len(data)
             if n < 3:
-                canvas.create_text(w/2, h/2, text="RADAR: Min. 3 clases requeridas", fill="#475569", font=("Arial", 10, "bold"))
+                canvas.create_text(cx_r, cy_r, text="RADAR: Min 3 clases", fill="#475569", font=("Arial", 8, "bold"))
             else:
                 angle_step = 2 * math.pi / n
-
-                # Anillos concentricos de referencia
-                for ring in [0.25, 0.5, 0.75, 1.0]:
+                for ring in [0.5, 1.0]:
                     r = radius * ring
                     ring_pts = []
                     for i in range(n):
@@ -410,84 +597,41 @@ class VisualPainter:
                         ring_pts.append((rx, ry))
                     flat_ring = [coord for pt in ring_pts for coord in pt]
                     canvas.create_polygon(flat_ring, fill="", outline="#1e293b", width=1)
-
-                # Ejes radiales y etiquetas
-                for i, (label, val) in enumerate(data):
-                    angle = -math.pi / 2 + i * angle_step
-                    ex = cx_r + radius * math.cos(angle)
-                    ey = cy_r + radius * math.sin(angle)
-                    canvas.create_line(cx_r, cy_r, ex, ey, fill="#334155", width=1)
-                    # Etiqueta del eje
-                    lx = cx_r + (radius + 18) * math.cos(angle)
-                    ly = cy_r + (radius + 18) * math.sin(angle)
-                    canvas.create_text(lx, ly, text=label[:8].upper(), fill="#94a3b8", font=("Arial", 7))
-
-                # Poligono de datos
+                
                 data_pts = []
+                line_col = "#0ea5e9" if model_type == "primary" else "#ffa500"
+                bg_col = "#0c4a6e" if model_type == "primary" else "#7c2d12"
+                
                 for i, (label, val) in enumerate(data):
                     angle = -math.pi / 2 + i * angle_step
                     r = (val / max_val) * radius
                     dx = cx_r + r * math.cos(angle)
                     dy = cy_r + r * math.sin(angle)
                     data_pts.append((dx, dy))
+                    
+                    # Eje y etiqueta
+                    ex = cx_r + radius * math.cos(angle)
+                    ey = cy_r + radius * math.sin(angle)
+                    canvas.create_line(cx_r, cy_r, ex, ey, fill="#334155", width=1)
+                    lx = cx_r + (radius + 8) * math.cos(angle)
+                    ly = cy_r + (radius + 8) * math.sin(angle)
+                    canvas.create_text(lx, ly, text=label[:5].upper(), fill="#94a3b8", font=("Arial", 6))
+                
                 flat_data = [coord for pt in data_pts for coord in pt]
-                canvas.create_polygon(flat_data, fill="#0ea5e920", outline="#38bdf8", width=2)
-
-                # Puntos destacados en cada vertice
-                for i, (dx, dy) in enumerate(data_pts):
-                    canvas.create_oval(dx-3, dy-3, dx+3, dy+3, fill="#38bdf8", outline="#fff")
-                    val_text = f"{data[i][1]:.1f}" if ax_y == "conf" else str(int(data[i][1]))
-                    canvas.create_text(dx, dy-12, text=val_text, fill="#38bdf8", font=("Arial", 8, "bold"))
+                canvas.create_polygon(flat_data, fill=bg_col, outline=line_col, width=1.5)
 
         elif ctype == "scatter":
-            # Grafico de Dispersion: burbujas de confianza vs conteo
-            # Cada burbuja = una clase. Tamano = cantidad. Posicion Y = confianza media
-            conf_data = []
-            conf_sums = Counter()
-            conf_counts_map = Counter()
-            for d in detections:
-                conf_sums[d['label']] += d.get('confidence', 0)
-                conf_counts_map[d['label']] += 1
-            for label in conf_sums:
-                avg_conf = conf_sums[label] / conf_counts_map[label]
-                count = conf_counts_map[label]
-                conf_data.append((label, count, avg_conf))
-
-            if not conf_data:
-                canvas.create_text(w/2, h/2, text="SCATTER: Sin detecciones activas", fill="#475569", font=("Arial", 10, "bold"))
-            else:
-                max_count = max(c for _, c, _ in conf_data)
-                if max_count == 0: max_count = 1
-
-                # Eje Y: Confianza (0-100%). Eje X: distribucion equidistante
-                chart_top = 15
-                chart_bottom = h - 45
-                chart_left = padding + 25
-                chart_right = w - padding
-
-                # Eje Y con marcas
-                canvas.create_line(chart_left, chart_top, chart_left, chart_bottom, fill="#334155", width=1)
-                for pct in [0, 25, 50, 75, 100]:
-                    yp = chart_bottom - (pct / 100) * (chart_bottom - chart_top)
-                    canvas.create_line(chart_left - 4, yp, chart_left, yp, fill="#475569")
-                    canvas.create_text(chart_left - 18, yp, text=f"{pct}%", fill="#475569", font=("Arial", 7))
-
-                # Eje X
-                canvas.create_line(chart_left, chart_bottom, chart_right, chart_bottom, fill="#334155", width=1)
-
-                # Colores para burbujas
-                bubble_colors = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"]
-                step_x = (chart_right - chart_left) / max(len(conf_data), 1)
-
-                for i, (label, count, avg_conf) in enumerate(conf_data):
-                    bx = chart_left + step_x * (i + 0.5)
-                    by = chart_bottom - (avg_conf * (chart_bottom - chart_top))
-                    # Tamano proporcional al conteo
-                    bubble_r = max(6, min(25, int((count / max_count) * 22) + 4))
-                    color = bubble_colors[i % len(bubble_colors)]
-                    canvas.create_oval(bx-bubble_r, by-bubble_r, bx+bubble_r, by+bubble_r, fill=color, outline="#fff", width=1)
-                    canvas.create_text(bx, by, text=str(count), fill="#fff", font=("Arial", 8, "bold"))
-                    canvas.create_text(bx, chart_bottom + 10, text=label[:8].upper(), fill="#94a3b8", font=("Arial", 7))
+            # Dispersion
+            step_x = (width - padding * 2) / max(len(data), 1)
+            for i, (label, val) in enumerate(data):
+                bx = x_offset + padding + step_x * (i + 0.5)
+                by = height - 35 - (val / max_val) * (height - 70)
+                
+                color = "#10b981" if model_type == "primary" else "#fb923c"
+                canvas.create_oval(bx-4, by-4, bx+4, by+4, fill=color, outline="#fff", width=1)
+                val_str = f"{val:.1f}" if ax_y == "conf" else str(int(val))
+                canvas.create_text(bx, by-10, text=val_str, fill="#fff", font=("Arial", 7, "bold"))
+                canvas.create_text(bx, height-18, text=label[:6].upper(), fill="#64748b", font=("Arial", 7))
 
     @staticmethod
     def draw_detections(frame, detections, is_focus=False, show_trails=True, dual_mode=False):
@@ -542,42 +686,79 @@ class VisualPainter:
             
             thick = 3 if is_focus else 2
             
-            # Dibujar Trayectoria (Trail) — solo para primario con tracking
-            if show_trails and t_id is not None:
-                center = ((x1 + x2) // 2, (y1 + y2) // 2)
-                if t_id not in VisualPainter._track_history:
-                    VisualPainter._track_history[t_id] = []
-                VisualPainter._track_history[t_id].append(center)
-                if len(VisualPainter._track_history[t_id]) > 30:
-                    VisualPainter._track_history[t_id].pop(0)
+            if dual_mode and source == "secondary":
+                # Diseño Cyberpunk de Brackets para M2 (Secundario)
+                bracket_len = max(8, min(20, int((x2 - x1) * 0.2)))
+                cv2.line(frame, (x1, y1), (x1 + bracket_len, y1), color, 2)
+                cv2.line(frame, (x1, y1), (x1, y1 + bracket_len), color, 2)
+                cv2.line(frame, (x2, y1), (x2 - bracket_len, y1), color, 2)
+                cv2.line(frame, (x2, y1), (x2, y1 + bracket_len), color, 2)
+                cv2.line(frame, (x1, y2), (x1 + bracket_len, y2), color, 2)
+                cv2.line(frame, (x1, y2), (x1, y2 - bracket_len), color, 2)
+                cv2.line(frame, (x2, y2), (x2 - bracket_len, y2), color, 2)
+                cv2.line(frame, (x2, y2), (x2, y2 - bracket_len), color, 2)
                 
-                # Dibujar línea de puntos
-                pts = VisualPainter._track_history[t_id]
-                for i in range(1, len(pts)):
-                    alpha = i / len(pts)
-                    c = (int(color[0]*alpha), int(color[1]*alpha), int(color[2]*alpha))
-                    cv2.line(frame, pts[i-1], pts[i], c, 2)
+                # Retícula de enfoque central flotante (+)
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                cv2.line(frame, (cx - 4, cy), (cx + 4, cy), color, 1)
+                cv2.line(frame, (cx, cy - 4), (cx, cy + 4), color, 1)
+                
+                # Etiqueta minimalista para M2
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                f_scale = 0.45
+                thick_txt = 1
+                tag = f"{label.upper()} [M2] {conf:.2f}"
+                (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick_txt)
+                
+                label_y = y1 - 8
+                if label_y < 15:
+                    label_y = y2 + th + 8
+                    
+                # Fondo negro sutil semi-transparente
+                lbl_bg = frame.copy()
+                cv2.rectangle(lbl_bg, (x1, label_y - th - 6), (x1 + tw + 10, label_y + 4), (15, 23, 42), -1)
+                cv2.addWeighted(lbl_bg, 0.7, frame, 0.3, 0, frame)
+                
+                # Borde fino de color secundario y texto
+                cv2.rectangle(frame, (x1, label_y - th - 6), (x1 + tw + 10, label_y + 4), color, 1)
+                cv2.putText(frame, tag, (x1 + 5, label_y - 1), font, f_scale, (248, 250, 252), thick_txt)
+            else:
+                # --- M1 o Modo Simple (Bounding Box Completo) ---
+                # Dibujar Trayectoria (Trail) — solo para primario con tracking
+                if show_trails and t_id is not None:
+                    center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    if t_id not in VisualPainter._track_history:
+                        VisualPainter._track_history[t_id] = []
+                    VisualPainter._track_history[t_id].append(center)
+                    if len(VisualPainter._track_history[t_id]) > 30:
+                        VisualPainter._track_history[t_id].pop(0)
+                    
+                    pts = VisualPainter._track_history[t_id]
+                    for i in range(1, len(pts)):
+                        alpha = i / len(pts)
+                        c = (int(color[0]*alpha), int(color[1]*alpha), int(color[2]*alpha))
+                        cv2.line(frame, pts[i-1], pts[i], c, 2)
 
-            # Dibujar Caja (Fondo translucido)
-            cv2.rectangle(box_overlay, (x1, y1), (x2, y2), color, -1)
-            # Dibujar Borde
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
-            
-            # Dibujar Etiqueta
-            id_txt = f" id:{t_id}" if t_id is not None else ""
-            source_tag = " [M2]" if dual_mode and source == "secondary" else ""
-            tag = f"{label.upper()}{id_txt} {conf:.2f}{source_tag}"
-            if is_focus: tag = f"[ FOCUS ] {tag}"
-            
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            f_scale = 0.5
-            thick_txt = 2 if is_focus else 1
-            (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick_txt)
-            
-            # Etiqueta opaca sobre la caja
-            cv2.rectangle(frame, (x1, y1 - th - 12), (x1 + tw + 10, y1), color, -1)
-            cv2.putText(frame, tag, (x1 + 5, y1 - 8), font, f_scale, (0, 0, 0), thick_txt)
-            
+                # Dibujar Caja (Fondo translucido)
+                cv2.rectangle(box_overlay, (x1, y1), (x2, y2), color, -1)
+                # Dibujar Borde
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
+                
+                # Dibujar Etiqueta
+                id_txt = f" id:{t_id}" if t_id is not None else ""
+                source_tag = " [M2]" if dual_mode and source == "secondary" else ""
+                tag = f"{label.upper()}{id_txt} {conf:.2f}{source_tag}"
+                if is_focus: tag = f"[ FOCUS ] {tag}"
+                
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                f_scale = 0.5
+                thick_txt = 2 if is_focus else 1
+                (tw, th), baseline = cv2.getTextSize(tag, font, f_scale, thick_txt)
+                
+                # Etiqueta opaca sobre la caja
+                cv2.rectangle(frame, (x1, y1 - th - 12), (x1 + tw + 10, y1), color, -1)
+                cv2.putText(frame, tag, (x1 + 5, y1 - 8), font, f_scale, (0, 0, 0), thick_txt)
+                
         # Mezclar cajas translucidas
         cv2.addWeighted(box_overlay, 0.25, frame, 0.75, 0, frame)
 
